@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -27,6 +27,8 @@ export default function Contacts() {
   const [searchTerm, setSearchTerm] = useState('')
   const [newContact, setNewContact] = useState({ name: '', phoneNumber: '', email: '' })
   const [isCreating, setIsCreating] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [isImporting, setIsImporting] = useState(false)
   const { data, isLoading, error, refetch } = useFetch<{ contacts: Contact[] }>(
     '/api/contacts',
     { userId: user?.id }
@@ -112,6 +114,146 @@ export default function Contacts() {
     }
   }
 
+  const handleExportCSV = () => {
+    if (!data?.contacts || data.contacts.length === 0) {
+      toast.error('No Contacts', {
+        description: 'There are no contacts to export',
+      })
+      return
+    }
+
+    try {
+      // Create CSV header
+      const headers = ['Name', 'Phone Number', 'Email']
+      const rows = data.contacts.map(contact => [
+        `"${contact.name.replace(/"/g, '""')}"`, // Escape quotes in names
+        contact.phoneNumber,
+        contact.email ? `"${contact.email.replace(/"/g, '""')}"` : ''
+      ])
+
+      const csvContent = [
+        headers.join(','),
+        ...rows.map(row => row.join(','))
+      ].join('\n')
+
+      // Create blob and download
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+      const link = document.createElement('a')
+      const url = URL.createObjectURL(blob)
+      
+      link.setAttribute('href', url)
+      link.setAttribute('download', `contacts_${new Date().getTime()}.csv`)
+      link.style.visibility = 'hidden'
+      
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      
+      toast.success('Export Successful', {
+        description: `${data.contacts.length} contact(s) exported successfully`,
+      })
+    } catch (err) {
+      console.error('Failed to export contacts:', err)
+      toast.error('Export Failed', {
+        description: 'Could not export contacts. Please try again.',
+      })
+    }
+  }
+
+  const handleImportCSV = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    try {
+      setIsImporting(true)
+      const text = await file.text()
+      const lines = text.trim().split('\n')
+      
+      if (lines.length < 2) {
+        toast.error('Invalid File', {
+          description: 'CSV file must contain headers and at least one contact',
+        })
+        return
+      }
+
+      // Skip header row
+      let successCount = 0
+      let errorCount = 0
+      const errors: string[] = []
+
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim()
+        if (!line) continue
+
+        // Simple CSV parsing
+        const matches = line.match(/(?:"([^"]*(?:""[^"]*)*)"|([^,]*))[,]?/g)
+        if (!matches || matches.length < 2) {
+          errors.push(`Row ${i + 1}: Invalid format`)
+          errorCount++
+          continue
+        }
+
+        let name = (matches[0] || '').replace(/^"|"$/g, '').replace(/""/g, '"')
+        let phoneNumber = (matches[1] || '').replace(/^"|"$/g, '').trim()
+        let email = matches[2] ? (matches[2] || '').replace(/^"|"$/g, '').trim() : ''
+
+        if (!name || !phoneNumber) {
+          errors.push(`Row ${i + 1}: Missing name or phone number`)
+          errorCount++
+          continue
+        }
+
+        try {
+          // Normalize phone number
+          phoneNumber = phoneNumber.replace(/[\+\s]/g, '')
+          if (!phoneNumber.startsWith('254')) {
+            phoneNumber = '254' + phoneNumber
+          }
+          phoneNumber = '+' + phoneNumber
+
+          await createContact({
+            userId: user?.id,
+            name,
+            phoneNumber,
+            email: email || null,
+          })
+          successCount++
+        } catch (err: any) {
+          if (err?.message?.includes('already')) {
+            errors.push(`Row ${i + 1}: ${name} already exists`)
+          } else {
+            errors.push(`Row ${i + 1}: ${err?.message || 'Failed to create'}`)
+          }
+          errorCount++
+        }
+      }
+
+      refetch()
+      
+      if (successCount > 0) {
+        toast.success('Import Complete', {
+          description: `${successCount} contact(s) imported successfully`,
+        })
+      }
+      
+      if (errorCount > 0) {
+        toast.error('Import Errors', {
+          description: `${errorCount} contact(s) failed to import${errors.length > 0 ? `. ${errors.slice(0, 3).join('; ')}${errors.length > 3 ? '...' : ''}` : ''}`,
+        })
+      }
+    } catch (err) {
+      console.error('Failed to import contacts:', err)
+      toast.error('Import Failed', {
+        description: 'Could not read the CSV file. Please check the format.',
+      })
+    } finally {
+      setIsImporting(false)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+    }
+  }
+
   return (
     <div className="p-8 space-y-8">
       {/* Header */}
@@ -188,14 +330,21 @@ export default function Contacts() {
             </div>
           </DialogContent>
         </Dialog>
-        <Button variant="outline" className="gap-2 border-border text-foreground">
+        <Button variant="outline" className="gap-2 border-border text-foreground" onClick={() => fileInputRef.current?.click()} disabled={isImporting}>
           <Upload className="w-4 h-4" />
-          Import CSV
+          {isImporting ? 'Importing...' : 'Import CSV'}
         </Button>
-        <Button variant="outline" className="gap-2 border-border text-foreground">
+        <Button variant="outline" className="gap-2 border-border text-foreground" onClick={handleExportCSV}>
           <Download className="w-4 h-4" />
           Export CSV
         </Button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".csv"
+          onChange={handleImportCSV}
+          style={{ display: 'none' }}
+        />
       </div>
 
       {/* Filters */}

@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { executeQuery } from '@/lib/db'
 import crypto from 'crypto'
 
+// Health check endpoint
+export async function GET() {
+  return NextResponse.json({ status: 'ok' }, { status: 200 })
+}
+
 function hashPassword(password: string): string {
   return crypto
     .pbkdf2Sync(password, 'salt', 1000, 64, 'sha512')
