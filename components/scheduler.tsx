@@ -1,54 +1,136 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Clock, Edit, Trash2, CheckCircle, AlertCircle } from 'lucide-react'
+import { Plus, Clock, Edit, Trash2, CheckCircle, AlertCircle, Loader, Search } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { useAuth } from '@/context/auth'
+import { useFetch, usePost } from '@/hooks/use-api'
+import { toast } from 'sonner'
+
+interface Campaign {
+  id: number
+  name: string
+  messageContent: string
+  status: 'draft' | 'scheduled' | 'sent' | 'cancelled'
+  totalRecipients: number
+  sentCount: number
+  failedCount: number
+  createdAt: string
+}
+
+interface Contact {
+  id: number
+  name: string
+  phoneNumber: string
+  groupId?: number
+}
+
+interface ContactGroup {
+  id: number
+  name: string
+}
 
 export default function Scheduler() {
-  const [scheduledMessages, setScheduledMessages] = useState([
-    {
-      id: 1,
-      title: 'Exam Reminder',
-      message: 'Exam scheduled next week. Check portal for details.',
-      recipients: 4234,
-      scheduledFor: '2024-02-25 09:00',
-      status: 'Scheduled',
-      timezone: 'EAT',
-    },
-    {
-      id: 2,
-      title: 'Fee Payment Deadline',
-      message: 'School fees payment deadline is Feb 28.',
-      recipients: 3456,
-      scheduledFor: '2024-02-20 10:00',
-      status: 'Scheduled',
-      timezone: 'EAT',
-    },
-    {
-      id: 3,
-      title: 'Course Registration Open',
-      message: 'Course registration is now open.',
-      recipients: 4234,
-      scheduledFor: '2024-02-15 08:00',
-      status: 'Sent',
-      timezone: 'EAT',
-    },
-    {
-      id: 4,
-      title: 'Class Cancellation Notice',
-      message: 'Physics 101 class is cancelled today.',
-      recipients: 567,
-      scheduledFor: '2024-02-18 14:00',
-      status: 'Failed',
-      timezone: 'EAT',
-    },
-  ])
+  const { user } = useAuth()
+  const [newCampaign, setNewCampaign] = useState({
+    name: '',
+    messageContent: '',
+    scheduledAt: '',
+  })
+  const [targetType, setTargetType] = useState<'contacts' | 'groups'>('contacts')
+  const [selectedTargets, setSelectedTargets] = useState<number[]>([])
+  const [searchTerm, setSearchTerm] = useState('')
+  const [isCreating, setIsCreating] = useState(false)
+  const { data, isLoading, error, refetch } = useFetch<{ campaigns: Campaign[] }>(
+    '/api/campaigns',
+    { userId: user?.id }
+  )
+  const { data: contactsData } = useFetch<{ contacts: Contact[] }>(
+    '/api/contacts',
+    { userId: user?.id }
+  )
+  const { data: groupsData } = useFetch<{ groups: ContactGroup[] }>(
+    '/api/contact-groups',
+    { userId: user?.id }
+  )
+  const { post: createCampaign } = usePost('/api/campaigns')
+
+  const filteredTargets = useMemo(() => {
+    if (targetType === 'contacts') {
+      if (!contactsData?.contacts) return []
+      return contactsData.contacts.filter(c =>
+        c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        c.phoneNumber.includes(searchTerm)
+      )
+    } else {
+      if (!groupsData?.groups) return []
+      return groupsData.groups.filter(g =>
+        g.name.toLowerCase().includes(searchTerm.toLowerCase())
+      )
+    }
+  }, [contactsData?.contacts, groupsData?.groups, targetType, searchTerm])
+
+  const handleSchedule = async () => {
+    if (!newCampaign.name.trim() || !newCampaign.messageContent.trim() || !newCampaign.scheduledAt) {
+      toast.error('Missing Fields', {
+        description: 'Please fill in campaign title, message, and date/time',
+      })
+      return
+    }
+
+    if (selectedTargets.length === 0) {
+      toast.error('No Recipients', {
+        description: `Please select at least one ${targetType === 'contacts' ? 'contact' : 'group'}`,
+      })
+      return
+    }
+
+    try {
+      setIsCreating(true)
+      await createCampaign({
+        userId: user?.id,
+        name: newCampaign.name,
+        messageContent: newCampaign.messageContent,
+        scheduledAt: newCampaign.scheduledAt,
+        targetType,
+        targets: selectedTargets,
+      })
+      setNewCampaign({ name: '', messageContent: '', scheduledAt: '' })
+      setSelectedTargets([])
+      setSearchTerm('')
+      toast.success('Campaign Scheduled', {
+        description: 'Your message has been scheduled successfully',
+      })
+      refetch()
+    } catch (err) {
+      console.error('Failed to schedule campaign:', err)
+      toast.error('Scheduling Failed', {
+        description: 'Could not schedule the campaign. Please try again.',
+      })
+    } finally {
+      setIsCreating(false)
+    }
+  }
+
+  const toggleTarget = (id: number) => {
+    setSelectedTargets(prev =>
+      prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
+    )
+  }
+
+  // Calculate stats from real data
+  const stats = {
+    scheduled: data?.campaigns?.filter(c => c.status === 'scheduled').length || 0,
+    sent: data?.campaigns?.filter(c => c.status === 'sent').length || 0,
+    failed: data?.campaigns?.filter(c => c.status === 'cancelled').length || 0,
+  }
 
   return (
     <div className="p-8 space-y-8">
@@ -65,7 +147,7 @@ export default function Scheduler() {
               Schedule Message
             </Button>
           </DialogTrigger>
-          <DialogContent className="bg-card border-border text-foreground">
+          <DialogContent className="bg-card border-border text-foreground max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="text-foreground">Schedule New Message</DialogTitle>
               <DialogDescription className="text-muted-foreground">
@@ -74,32 +156,113 @@ export default function Scheduler() {
             </DialogHeader>
             <div className="space-y-4">
               <div>
-                <label className="text-sm font-medium text-foreground">Message Title</label>
-                <Input placeholder="e.g., Exam Reminder" className="bg-secondary border-border text-foreground mt-1" />
+                <label className="text-sm font-medium text-foreground">Campaign Title</label>
+                <Input
+                  placeholder="e.g., Exam Reminder"
+                  className="bg-secondary border-border text-foreground mt-1"
+                  value={newCampaign.name}
+                  onChange={(e) => setNewCampaign({ ...newCampaign, name: e.target.value })}
+                />
               </div>
               <div>
                 <label className="text-sm font-medium text-foreground">Message Content</label>
-                <Textarea placeholder="Type your message..." className="bg-secondary border-border text-foreground mt-1 min-h-20" />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-sm font-medium text-foreground">Date</label>
-                  <Input type="date" className="bg-secondary border-border text-foreground mt-1" />
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-foreground">Time</label>
-                  <Input type="time" className="bg-secondary border-border text-foreground mt-1" />
-                </div>
+                <Textarea
+                  placeholder="Type your message..."
+                  className="bg-secondary border-border text-foreground mt-1 min-h-20"
+                  value={newCampaign.messageContent}
+                  onChange={(e) => setNewCampaign({ ...newCampaign, messageContent: e.target.value })}
+                />
               </div>
               <div>
-                <label className="text-sm font-medium text-foreground">Timezone</label>
-                <select className="w-full bg-secondary border border-border rounded-md p-2 text-foreground mt-1">
-                  <option value="eat" className="bg-secondary">East Africa Time (EAT)</option>
-                  <option value="cat" className="bg-secondary">Central Africa Time (CAT)</option>
-                  <option value="wat" className="bg-secondary">West Africa Time (WAT)</option>
-                </select>
+                <label className="text-sm font-medium text-foreground">Send To</label>
+                <div className="flex gap-4 mt-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="targetType"
+                      value="contacts"
+                      checked={targetType === 'contacts'}
+                      onChange={(e) => {
+                        setTargetType('contacts')
+                        setSelectedTargets([])
+                        setSearchTerm('')
+                      }}
+                      className="w-4 h-4"
+                    />
+                    <span className="text-sm text-foreground">Individual Contacts</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="targetType"
+                      value="groups"
+                      checked={targetType === 'groups'}
+                      onChange={(e) => {
+                        setTargetType('groups')
+                        setSelectedTargets([])
+                        setSearchTerm('')
+                      }}
+                      className="w-4 h-4"
+                    />
+                    <span className="text-sm text-foreground">Contact Groups</span>
+                  </label>
+                </div>
               </div>
-              <Button className="w-full bg-primary hover:bg-primary/90">Schedule Message</Button>
+
+              {/* Recipients Selection */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-sm font-medium text-foreground">
+                    Select {targetType === 'contacts' ? 'Contacts' : 'Groups'} ({selectedTargets.length})
+                  </label>
+                </div>
+                <Input
+                  placeholder="Search..."
+                  className="bg-secondary border-border text-foreground mb-2"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+                <div className="border border-border rounded-lg bg-secondary/50 max-h-48 overflow-y-auto p-2 space-y-2">
+                  {filteredTargets.length > 0 ? (
+                    filteredTargets.map(target => (
+                      <div key={target.id} className="flex items-center gap-2 p-2 hover:bg-secondary rounded cursor-pointer">
+                        <Checkbox
+                          checked={selectedTargets.includes(target.id)}
+                          onCheckedChange={() => toggleTarget(target.id)}
+                          className="w-4 h-4"
+                        />
+                        <label className="flex-1 cursor-pointer text-sm text-foreground">
+                          {('name' in target) ? target.name : target.name}
+                          {targetType === 'contacts' && 'phoneNumber' in target && (
+                            <span className="ml-2 text-xs text-muted-foreground">{target.phoneNumber}</span>
+                          )}
+                        </label>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-center py-4 text-muted-foreground text-sm">
+                      No {targetType === 'contacts' ? 'contacts' : 'groups'} found
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-foreground">Schedule Date & Time</label>
+                <Input
+                  type="datetime-local"
+                  className="bg-secondary border-border text-foreground mt-1"
+                  value={newCampaign.scheduledAt}
+                  onChange={(e) => setNewCampaign({ ...newCampaign, scheduledAt: e.target.value })}
+                />
+              </div>
+              <Button
+                className="w-full bg-primary hover:bg-primary/90"
+                onClick={handleSchedule}
+                disabled={isCreating}
+              >
+                {isCreating ? 'Scheduling...' : 'Schedule Message'}
+              </Button>
             </div>
           </DialogContent>
         </Dialog>
@@ -108,10 +271,10 @@ export default function Scheduler() {
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         {[
-          { label: 'Total Scheduled', value: '8', icon: Clock, color: 'bg-blue-500' },
-          { label: 'Pending', value: '4', icon: Clock, color: 'bg-yellow-500' },
-          { label: 'Sent', value: '3', icon: CheckCircle, color: 'bg-green-500' },
-          { label: 'Failed', value: '1', icon: AlertCircle, color: 'bg-red-500' },
+          { label: 'Total Campaigns', value: data?.campaigns?.length || 0, icon: Clock, color: 'bg-blue-500' },
+          { label: 'Pending', value: stats.scheduled, icon: Clock, color: 'bg-yellow-500' },
+          { label: 'Sent', value: stats.sent, icon: CheckCircle, color: 'bg-green-500' },
+          { label: 'Cancelled', value: stats.failed, icon: AlertCircle, color: 'bg-red-500' },
         ].map((stat, index) => {
           const Icon = stat.icon
           return (
@@ -134,65 +297,69 @@ export default function Scheduler() {
       <Card className="bg-card border-border">
         <CardHeader>
           <CardTitle className="text-card-foreground">Scheduled Messages</CardTitle>
-          <CardDescription className="text-muted-foreground">Manage your scheduled SMS notifications</CardDescription>
+          <CardDescription className="text-muted-foreground">Manage your scheduled SMS campaigns</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow className="border-border hover:bg-transparent">
-                  <TableHead className="text-muted-foreground">Title</TableHead>
-                  <TableHead className="text-muted-foreground">Scheduled For</TableHead>
-                  <TableHead className="text-muted-foreground">Recipients</TableHead>
-                  <TableHead className="text-muted-foreground">Status</TableHead>
-                  <TableHead className="text-right text-muted-foreground">Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {scheduledMessages.map((msg) => (
-                  <TableRow key={msg.id} className="border-border hover:bg-secondary/50">
-                    <TableCell>
-                      <div>
-                        <p className="font-medium text-foreground">{msg.title}</p>
-                        <p className="text-xs text-muted-foreground line-clamp-1">{msg.message}</p>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-foreground">
-                      {msg.scheduledFor}
-                      <p className="text-xs text-muted-foreground">{msg.timezone}</p>
-                    </TableCell>
-                    <TableCell className="text-foreground">{msg.recipients.toLocaleString()}</TableCell>
-                    <TableCell>
-                      <Badge
-                        variant="outline"
-                        className={
-                          msg.status === 'Scheduled'
-                            ? 'border-blue-500 text-blue-400'
-                            : msg.status === 'Sent'
-                            ? 'border-green-500 text-green-400'
-                            : 'border-red-500 text-red-400'
-                        }
-                      >
-                        {msg.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right space-x-2">
-                      {msg.status === 'Scheduled' && (
-                        <>
-                          <Button variant="ghost" size="sm" className="text-foreground hover:text-accent">
-                            <Edit className="w-4 h-4" />
-                          </Button>
-                          <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive">
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        </>
-                      )}
-                    </TableCell>
+          {isLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader className="w-5 h-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : data?.campaigns && data.campaigns.length > 0 ? (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-border hover:bg-transparent">
+                    <TableHead className="text-muted-foreground">Title</TableHead>
+                    <TableHead className="text-muted-foreground">Recipients</TableHead>
+                    <TableHead className="text-muted-foreground">Sent/Failed</TableHead>
+                    <TableHead className="text-muted-foreground">Status</TableHead>
+                    <TableHead className="text-muted-foreground">Created</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+                </TableHeader>
+                <TableBody>
+                  {data.campaigns.map((campaign) => (
+                    <TableRow key={campaign.id} className="border-border hover:bg-secondary/50">
+                      <TableCell>
+                        <div>
+                          <p className="font-medium text-foreground">{campaign.name}</p>
+                          <p className="text-xs text-muted-foreground line-clamp-1">{campaign.messageContent}</p>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-foreground">{campaign.totalRecipients.toLocaleString()}</TableCell>
+                      <TableCell className="text-foreground">
+                        <span className="text-green-400">{campaign.sentCount}</span>
+                        <span className="text-muted-foreground"> / </span>
+                        <span className="text-red-400">{campaign.failedCount}</span>
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={
+                            campaign.status === 'scheduled'
+                              ? 'border-blue-500 text-blue-400'
+                              : campaign.status === 'sent'
+                              ? 'border-green-500 text-green-400'
+                              : campaign.status === 'draft'
+                              ? 'border-yellow-500 text-yellow-400'
+                              : 'border-red-500 text-red-400'
+                          }
+                        >
+                          {campaign.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-foreground text-sm">
+                        {new Date(campaign.createdAt).toLocaleDateString()}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          ) : (
+            <div className="text-center py-8">
+              <p className="text-muted-foreground">No scheduled campaigns yet</p>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -203,8 +370,7 @@ export default function Scheduler() {
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground space-y-2">
           <p>• Schedule important reminders in advance to ensure timely delivery</p>
-          <p>• Use timezone settings to send messages at optimal times for recipients</p>
-          <p>• Scheduled messages can be edited or cancelled anytime before sending</p>
+          <p>• Scheduled messages will be sent at the specified time</p>
           <p>• Track delivery status in real-time through the dashboard</p>
         </CardContent>
       </Card>

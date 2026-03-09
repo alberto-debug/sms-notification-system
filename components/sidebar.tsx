@@ -3,6 +3,7 @@
 import { MessageSquare, Users, Send, Clock, FileText, BarChart3, Settings, LogOut } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
+import { useAuth } from '@/context/auth'
 
 interface SidebarProps {
   currentPage: string
@@ -10,6 +11,8 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
+  const { user, logout } = useAuth()
+
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
     { id: 'contacts', label: 'Contacts', icon: Users },
@@ -57,8 +60,14 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
         })}
       </nav>
 
-      {/* Bottom Section */}
-      <div className="p-4 border-t border-sidebar-border space-y-2">
+      {/* User Info & Bottom Section */}
+      <div className="p-4 border-t border-sidebar-border space-y-3">
+        {user && (
+          <div className="px-3 py-2 bg-sidebar-accent bg-opacity-50 rounded-md">
+            <p className="text-xs text-sidebar-accent-foreground">Logged in as:</p>
+            <p className="text-sm font-medium text-sidebar-foreground truncate">{user.email}</p>
+          </div>
+        )}
         <Button
           variant="outline"
           className="w-full justify-start gap-2 text-sidebar-foreground hover:bg-sidebar-accent"
@@ -68,8 +77,9 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
           Settings
         </Button>
         <Button
+          onClick={logout}
           variant="outline"
-          className="w-full justify-start gap-2 text-sidebar-foreground hover:bg-sidebar-accent"
+          className="w-full justify-start gap-2 text-sidebar-foreground hover:bg-red-500/10 hover:text-red-500"
           size="sm"
         >
           <LogOut className="w-4 h-4" />
