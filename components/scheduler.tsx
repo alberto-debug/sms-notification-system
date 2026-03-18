@@ -4,7 +4,7 @@ import { useState, useMemo } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Clock, Edit, Trash2, CheckCircle, AlertCircle, Loader, Search } from 'lucide-react'
+import { Plus, Clock, Edit, Trash2, CheckCircle, AlertCircle, Loader, Search, X } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -22,6 +22,7 @@ interface Campaign {
   totalRecipients: number
   sentCount: number
   failedCount: number
+  scheduledAt: string | null
   createdAt: string
 }
 
@@ -48,6 +49,9 @@ export default function Scheduler() {
   const [selectedTargets, setSelectedTargets] = useState<number[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [isCreating, setIsCreating] = useState(false)
+  const [cancellingId, setCancellingId] = useState<number | null>(null)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const { data, isLoading, error, refetch } = useFetch<{ campaigns: Campaign[] }>(
     '/api/campaigns',
     { userId: user?.id }
@@ -85,6 +89,16 @@ export default function Scheduler() {
       return
     }
 
+    // Validate that the scheduled date is not in the past
+    const scheduledDate = new Date(newCampaign.scheduledAt)
+    const now = new Date()
+    if (scheduledDate <= now) {
+      toast.error('Invalid Date', {
+        description: 'Please select a date and time in the future',
+      })
+      return
+    }
+
     if (selectedTargets.length === 0) {
       toast.error('No Recipients', {
         description: `Please select at least one ${targetType === 'contacts' ? 'contact' : 'group'}`,
@@ -105,6 +119,7 @@ export default function Scheduler() {
       setNewCampaign({ name: '', messageContent: '', scheduledAt: '' })
       setSelectedTargets([])
       setSearchTerm('')
+      setDialogOpen(false)
       toast.success('Campaign Scheduled', {
         description: 'Your message has been scheduled successfully',
       })
@@ -125,6 +140,67 @@ export default function Scheduler() {
     )
   }
 
+  const handleCancelCampaign = async (campaignId: number) => {
+    try {
+      setCancellingId(campaignId)
+      const response = await fetch(`/api/campaigns/${campaignId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user?.id,
+          action: 'cancel',
+        }),
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || 'Failed to cancel campaign')
+      }
+
+      toast.success('Campaign Cancelled', {
+        description: 'The campaign has been cancelled successfully',
+      })
+      refetch()
+    } catch (error) {
+      console.error('Error cancelling campaign:', error)
+      toast.error('Cannot Cancel', {
+        description: error instanceof Error ? error.message : 'Failed to cancel campaign',
+      })
+    } finally {
+      setCancellingId(null)
+    }
+  }
+
+  const handleDeleteCampaign = async (campaignId: number) => {
+    try {
+      setDeletingId(campaignId)
+      const response = await fetch(`/api/campaigns/${campaignId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user?.id,
+        }),
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || 'Failed to delete campaign')
+      }
+
+      toast.success('Campaign Deleted', {
+        description: 'The campaign has been permanently deleted',
+      })
+      refetch()
+    } catch (error) {
+      console.error('Error deleting campaign:', error)
+      toast.error('Cannot Delete', {
+        description: error instanceof Error ? error.message : 'Failed to delete campaign',
+      })
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   // Calculate stats from real data
   const stats = {
     scheduled: data?.campaigns?.filter(c => c.status === 'scheduled').length || 0,
@@ -140,7 +216,7 @@ export default function Scheduler() {
           <h1 className="text-3xl font-bold text-foreground">Message Scheduler</h1>
           <p className="text-muted-foreground mt-1">Schedule SMS notifications for specific dates and times</p>
         </div>
-        <Dialog>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
             <Button className="bg-primary hover:bg-primary/90 gap-2">
               <Plus className="w-4 h-4" />
@@ -312,8 +388,10 @@ export default function Scheduler() {
                     <TableHead className="text-muted-foreground">Title</TableHead>
                     <TableHead className="text-muted-foreground">Recipients</TableHead>
                     <TableHead className="text-muted-foreground">Sent/Failed</TableHead>
+                    <TableHead className="text-muted-foreground">Scheduled For</TableHead>
                     <TableHead className="text-muted-foreground">Status</TableHead>
                     <TableHead className="text-muted-foreground">Created</TableHead>
+                    <TableHead className="text-muted-foreground">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -330,6 +408,9 @@ export default function Scheduler() {
                         <span className="text-green-400">{campaign.sentCount}</span>
                         <span className="text-muted-foreground"> / </span>
                         <span className="text-red-400">{campaign.failedCount}</span>
+                      </TableCell>
+                      <TableCell className="text-foreground text-sm">
+                        {campaign.scheduledAt ? new Date(campaign.scheduledAt).toLocaleString() : 'Not scheduled'}
                       </TableCell>
                       <TableCell>
                         <Badge
@@ -349,6 +430,40 @@ export default function Scheduler() {
                       </TableCell>
                       <TableCell className="text-foreground text-sm">
                         {new Date(campaign.createdAt).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell className="flex gap-2">
+                        {campaign.status !== 'cancelled' && campaign.status !== 'sent' && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-yellow-500 text-yellow-400 hover:bg-yellow-500/10"
+                            onClick={() => handleCancelCampaign(campaign.id)}
+                            disabled={cancellingId === campaign.id}
+                          >
+                            {cancellingId === campaign.id ? (
+                              <Loader className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <X className="w-3 h-3" />
+                            )}
+                            <span className="ml-1 text-xs">Cancel</span>
+                          </Button>
+                        )}
+                        {campaign.status === 'cancelled' && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-red-500 text-red-400 hover:bg-red-500/10"
+                            onClick={() => handleDeleteCampaign(campaign.id)}
+                            disabled={deletingId === campaign.id}
+                          >
+                            {deletingId === campaign.id ? (
+                              <Loader className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-3 h-3" />
+                            )}
+                            <span className="ml-1 text-xs">Delete</span>
+                          </Button>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}

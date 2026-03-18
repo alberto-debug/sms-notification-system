@@ -18,7 +18,7 @@ interface SendSMSResult {
   statusCode?: number
   error?: string
 }
-
+ 
 /**
  * Initialize the Africa's Talking SDK client
  */

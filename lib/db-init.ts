@@ -1,4 +1,11 @@
 import mysql from 'mysql2/promise'
+import crypto from 'crypto'
+
+function hashPassword(password: string): string {
+  return crypto
+    .pbkdf2Sync(password, 'salt', 1000, 64, 'sha512')
+    .toString('hex')
+}
 
 export async function initializeDatabase() {
   const config = {
@@ -115,6 +122,7 @@ export async function initializeDatabase() {
         id INT AUTO_INCREMENT PRIMARY KEY,
         user_id INT NOT NULL,
         name VARCHAR(255) NOT NULL,
+        description TEXT,
         message_content TEXT NOT NULL,
         target_type ENUM('contacts', 'groups') DEFAULT 'contacts',
         targets JSON,
@@ -132,6 +140,20 @@ export async function initializeDatabase() {
       )
     `)
     console.log('Table "sms_campaigns" created or already exists')
+
+    // Add description column if it doesn't exist (for existing databases)
+    try {
+      await conn.execute(`
+        ALTER TABLE sms_campaigns 
+        ADD COLUMN description TEXT AFTER name
+      `)
+      console.log('✅ Added description column to sms_campaigns')
+    } catch (error: any) {
+      // Column might already exist, ignore error
+      if (error.code !== 'ER_DUP_FIELDNAME') {
+        console.log('ℹ️  Description column already exists in sms_campaigns')
+      }
+    }
 
     // Create audit logs table
     await conn.execute(`
@@ -152,7 +174,55 @@ export async function initializeDatabase() {
     `)
     console.log('Table "audit_logs" created or already exists')
 
-    console.log('✅ Database initialization completed successfully')
+    // SEED DATABASE DATA
+    console.log('\n📝 Seeding database with initial data...')
+    
+    // Check if admin user already exists
+    const [existingAdmin]: any = await conn.execute(
+      "SELECT id FROM users WHERE email = ?",
+      ['admin@notification.com']
+    )
+
+    if (existingAdmin.length === 0) {
+      // Create admin user
+      await conn.execute(
+        'INSERT INTO users (email, password, name, is_admin, is_active) VALUES (?, ?, ?, ?, ?)',
+        [
+          'admin@notification.com',
+          hashPassword('admin123'),
+          'Admin User',
+          true,
+          true,
+        ]
+      )
+      console.log('✅ Admin user created: admin@notification.com / admin123')
+    } else {
+      console.log('ℹ️  Admin user already exists')
+    }
+
+    // Check if demo user already exists
+    const [existingDemo]: any = await conn.execute(
+      "SELECT id FROM users WHERE email = ?",
+      ['demo@notification.com']
+    )
+
+    if (existingDemo.length === 0) {
+      // Create demo user
+      await conn.execute(
+        'INSERT INTO users (email, password, name, is_active) VALUES (?, ?, ?, ?)',
+        [
+          'demo@notification.com',
+          hashPassword('demo123'),
+          'Demo User',
+          true,
+        ]
+      )
+      console.log('✅ Demo user created: demo@notification.com / demo123')
+    } else {
+      console.log('ℹ️  Demo user already exists')
+    }
+
+    console.log('\n✅ Database initialization and seeding completed successfully')
     return true
   } catch (error) {
     console.error('❌ Database initialization failed:', error)

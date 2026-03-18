@@ -22,6 +22,7 @@ export async function GET(request: NextRequest) {
         total_recipients as totalRecipients,
         sent_count as sentCount,
         failed_count as failedCount,
+        scheduled_at as scheduledAt,
         created_at as createdAt
       FROM sms_campaigns 
       WHERE user_id = ? 

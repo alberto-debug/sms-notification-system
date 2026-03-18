@@ -4,6 +4,7 @@ import { Analytics } from '@vercel/analytics/next'
 import { AuthProvider } from '@/context/auth'
 import { ThemeProvider } from '@/components/theme-provider'
 import { Toaster } from 'sonner'
+import { initializeServer } from '@/lib/server-init'
 import './globals.css'
 
 const _geist = Geist({ subsets: ["latin"] });
@@ -31,6 +32,11 @@ export const metadata: Metadata = {
     apple: '/apple-icon.png',
   },
 }
+
+// Initialize server (database, etc.) on app startup
+initializeServer().catch((error) => {
+  console.error('Server initialization error:', error)
+})
 
 export default function RootLayout({
   children,
