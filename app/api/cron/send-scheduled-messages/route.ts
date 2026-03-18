@@ -41,10 +41,30 @@ export async function GET(request: NextRequest) {
 
     let processed = 0
     let failed = 0
+    let expired = 0
 
     for (const campaign of campaigns) {
       try {
-        console.log(`📧 Processing campaign ${campaign.id}: ${campaign.scheduled_at}`)
+        const scheduledDate = new Date(campaign.scheduled_at)
+        const now = new Date()
+        const minutesPassed = Math.floor((now.getTime() - scheduledDate.getTime()) / 60000)
+
+        console.log(`📧 Processing campaign ${campaign.id}: scheduled at ${campaign.scheduled_at}, ${minutesPassed} minutes ago`)
+
+        // If more than 60 minutes have passed, mark as expired instead of sending
+        if (minutesPassed > 60) {
+          console.log(`⏰ Campaign ${campaign.id} expired (${minutesPassed} minutes past scheduled time) - NOT sending`)
+          
+          await executeQuery(
+            `UPDATE sms_campaigns 
+             SET status = 'cancelled', updated_at = NOW()
+             WHERE id = ?`,
+            [campaign.id]
+          )
+          
+          expired++
+          continue
+        }
 
         // Get recipients based on target type
         let recipients: any = []
@@ -80,14 +100,6 @@ export async function GET(request: NextRequest) {
             if (result.success) {
               sentCount++
               console.log(`✅ SMS sent to ${recipient.phone_number} (messageId: ${result.messageId})`)
-
-              // Log message as sent
-              await executeQuery(
-                `INSERT INTO sms_messages 
-                 (user_id, recipient_phone, message_content, status, sent_at) 
-                 VALUES (?, ?, ?, 'sent', NOW())`,
-                [campaign.user_id, recipient.phone_number, campaign.message_content]
-              )
             } else {
               failedCount++
               console.warn(`⚠️  Failed to send SMS to ${recipient.phone_number}: ${result.error}`)
@@ -112,10 +124,8 @@ export async function GET(request: NextRequest) {
         console.error(`❌ Failed to process campaign ${campaign.id}:`, error)
         failed++
 
-        // Don't update to cancelled on error - keep as scheduled so it can be retried
-        // Only mark as failed/cancelled if explicitly needed via the UI
+        // Don't update status on error - keep as scheduled so it can be retried
         try {
-          const errorMsg = error instanceof Error ? error.message : String(error)
           await executeQuery(
             `UPDATE sms_campaigns SET updated_at = NOW() WHERE id = ?`,
             [campaign.id]
@@ -128,8 +138,9 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `Processed ${processed} campaigns, ${failed} failed`,
+      message: `Processed ${processed} campaigns, ${expired} expired, ${failed} failed`,
       processed,
+      expired,
       failed,
     })
   } catch (error) {

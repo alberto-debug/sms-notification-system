@@ -36,15 +36,15 @@ function startScheduledMessageCron() {
   if (cronJobStarted) return
 
   cronJobStarted = true
-  console.log('⏰ Starting scheduled message cron job (runs every 60 seconds)...')
+  console.log('⏰ Starting scheduled message cron job (runs every 10 seconds)...')
 
   // Run immediately on startup
   triggerScheduledMessageCron()
 
-  // Then run every 60 seconds
+  // Then run every 10 seconds for precise timing
   setInterval(() => {
     triggerScheduledMessageCron()
-  }, 60000) // 60 seconds
+  }, 10000) // 10 seconds
 }
 
 async function triggerScheduledMessageCron() {

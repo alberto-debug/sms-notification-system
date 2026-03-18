@@ -1,18 +1,21 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Clock, Edit, Trash2, CheckCircle, AlertCircle, Loader, Search, X } from 'lucide-react'
+import { Plus, Clock, Edit, Trash2, CheckCircle, AlertCircle, Loader, Search, X, Users } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+
 import { useAuth } from '@/context/auth'
 import { useFetch, usePost } from '@/hooks/use-api'
 import { toast } from 'sonner'
+
+// Fix for native date/time inputs styling
 
 interface Campaign {
   id: number
@@ -40,10 +43,26 @@ interface ContactGroup {
 
 export default function Scheduler() {
   const { user } = useAuth()
+  const isSubmittingRef = useRef(false)
+  
+  // Initialize with current date and time PLUS 1 minute (to ensure it's always valid)
+  const getCurrentDateTime = () => {
+    const now = new Date()
+    now.setMinutes(now.getMinutes() + 1) // Add 1 minute to ensure it's in the future
+    
+    const year = now.getFullYear()
+    const month = String(now.getMonth() + 1).padStart(2, '0')
+    const day = String(now.getDate()).padStart(2, '0')
+    const hours = String(now.getHours()).padStart(2, '0')
+    const minutes = String(now.getMinutes()).padStart(2, '0')
+    
+    return `${year}-${month}-${day}T${hours}:${minutes}` // Format: YYYY-MM-DDTHH:mm using local timezone
+  }
+
   const [newCampaign, setNewCampaign] = useState({
     name: '',
     messageContent: '',
-    scheduledAt: '',
+    scheduledAt: getCurrentDateTime(),
   })
   const [targetType, setTargetType] = useState<'contacts' | 'groups'>('contacts')
   const [selectedTargets, setSelectedTargets] = useState<number[]>([])
@@ -52,6 +71,16 @@ export default function Scheduler() {
   const [cancellingId, setCancellingId] = useState<number | null>(null)
   const [deletingId, setDeletingId] = useState<number | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [showContactsModal, setShowContactsModal] = useState(false)
+  const [showGroupsModal, setShowGroupsModal] = useState(false)
+  const [validationErrors, setValidationErrors] = useState<{
+    name?: boolean
+    messageContent?: boolean
+    scheduledAt?: boolean
+    recipients?: boolean
+  }>({
+    scheduledAt: false // Initialize as false (valid)
+  })
   const { data, isLoading, error, refetch } = useFetch<{ campaigns: Campaign[] }>(
     '/api/campaigns',
     { userId: user?.id }
@@ -66,47 +95,77 @@ export default function Scheduler() {
   )
   const { post: createCampaign } = usePost('/api/campaigns')
 
-  const filteredTargets = useMemo(() => {
-    if (targetType === 'contacts') {
-      if (!contactsData?.contacts) return []
-      return contactsData.contacts.filter(c =>
-        c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        c.phoneNumber.includes(searchTerm)
-      )
-    } else {
-      if (!groupsData?.groups) return []
-      return groupsData.groups.filter(g =>
-        g.name.toLowerCase().includes(searchTerm.toLowerCase())
-      )
-    }
-  }, [contactsData?.contacts, groupsData?.groups, targetType, searchTerm])
+  const filteredContacts = useMemo(() => {
+    if (!contactsData?.contacts) return []
+    return contactsData.contacts.filter(c =>
+      c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      c.phoneNumber.includes(searchTerm)
+    )
+  }, [contactsData?.contacts, searchTerm])
+
+  const filteredGroups = useMemo(() => {
+    if (!groupsData?.groups) return []
+    return groupsData.groups.filter(g =>
+      g.name.toLowerCase().includes(searchTerm.toLowerCase())
+    )
+  }, [groupsData?.groups, searchTerm])
 
   const handleSchedule = async () => {
-    if (!newCampaign.name.trim() || !newCampaign.messageContent.trim() || !newCampaign.scheduledAt) {
-      toast.error('Missing Fields', {
-        description: 'Please fill in campaign title, message, and date/time',
-      })
+    // Prevent multiple submissions with ref lock
+    if (isSubmittingRef.current || isCreating) {
+      console.log('Submission already in progress')
       return
     }
-
-    // Validate that the scheduled date is not in the past
-    const scheduledDate = new Date(newCampaign.scheduledAt)
-    const now = new Date()
-    if (scheduledDate <= now) {
-      toast.error('Invalid Date', {
-        description: 'Please select a date and time in the future',
-      })
-      return
-    }
-
-    if (selectedTargets.length === 0) {
-      toast.error('No Recipients', {
-        description: `Please select at least one ${targetType === 'contacts' ? 'contact' : 'group'}`,
-      })
-      return
-    }
-
+    
+    isSubmittingRef.current = true
+    
     try {
+      const errors: typeof validationErrors = {}
+      
+      // Only validate if fields are empty
+      if (!newCampaign.name.trim()) errors.name = true
+      if (!newCampaign.messageContent.trim()) errors.messageContent = true
+      if (!newCampaign.scheduledAt) errors.scheduledAt = true
+      if (selectedTargets.length === 0) errors.recipients = true
+      
+      // Validate time is not in the past
+      if (newCampaign.scheduledAt && !errors.scheduledAt) {
+        // Parse date and time correctly in local timezone
+        const [dateStr, timeStr] = newCampaign.scheduledAt.split('T')
+        const [year, month, day] = dateStr.split('-')
+        const [hours, minutes] = timeStr.split(':')
+        
+        const scheduledDate = new Date(
+          parseInt(year),
+          parseInt(month) - 1,
+          parseInt(day),
+          parseInt(hours),
+          parseInt(minutes),
+          0
+        )
+        
+        const now = new Date()
+        
+        if (scheduledDate <= now) {
+          errors.scheduledAt = true
+          toast.error('Invalid Schedule Time', {
+            description: 'Cannot schedule for a past time. Please select a future time.',
+          })
+          setValidationErrors(errors)
+          return
+        }
+      }
+      
+      setValidationErrors(errors)
+      
+      // If there are errors, show toast but button stays active
+      if (Object.keys(errors).length > 0) {
+        toast.error('Missing Fields', {
+          description: 'Please fill in all required fields marked in red',
+        })
+        return
+      }
+
       setIsCreating(true)
       await createCampaign({
         userId: user?.id,
@@ -116,9 +175,10 @@ export default function Scheduler() {
         targetType,
         targets: selectedTargets,
       })
-      setNewCampaign({ name: '', messageContent: '', scheduledAt: '' })
+      setNewCampaign({ name: '', messageContent: '', scheduledAt: getCurrentDateTime() })
       setSelectedTargets([])
       setSearchTerm('')
+      setValidationErrors({})
       setDialogOpen(false)
       toast.success('Campaign Scheduled', {
         description: 'Your message has been scheduled successfully',
@@ -131,13 +191,16 @@ export default function Scheduler() {
       })
     } finally {
       setIsCreating(false)
+      isSubmittingRef.current = false
     }
   }
 
   const toggleTarget = (id: number) => {
-    setSelectedTargets(prev =>
-      prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
-    )
+    setSelectedTargets(prev => {
+      const updated = prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
+      setValidationErrors(prevErrors => ({ ...prevErrors, recipients: updated.length === 0 }))
+      return updated
+    })
   }
 
   const handleCancelCampaign = async (campaignId: number) => {
@@ -201,7 +264,6 @@ export default function Scheduler() {
     }
   }
 
-  // Calculate stats from real data
   const stats = {
     scheduled: data?.campaigns?.filter(c => c.status === 'scheduled').length || 0,
     sent: data?.campaigns?.filter(c => c.status === 'sent').length || 0,
@@ -216,128 +278,304 @@ export default function Scheduler() {
           <h1 className="text-3xl font-bold text-foreground">Message Scheduler</h1>
           <p className="text-muted-foreground mt-1">Schedule SMS notifications for specific dates and times</p>
         </div>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog open={dialogOpen} onOpenChange={(open) => {
+          setDialogOpen(open)
+          if (open) {
+            // Reset form with current date/time when opening
+            setNewCampaign({
+              name: '',
+              messageContent: '',
+              scheduledAt: getCurrentDateTime(),
+            })
+            setSelectedTargets([])
+            setSearchTerm('')
+            setValidationErrors({ scheduledAt: false, name: false, messageContent: false, recipients: false })
+          }
+        }}>
           <DialogTrigger asChild>
             <Button className="bg-primary hover:bg-primary/90 gap-2">
               <Plus className="w-4 h-4" />
               Schedule Message
             </Button>
           </DialogTrigger>
-          <DialogContent className="bg-card border-border text-foreground max-h-[90vh] overflow-y-auto">
+          <DialogContent className="bg-card border-border text-foreground w-full max-w-5xl max-h-[95vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle className="text-foreground">Schedule New Message</DialogTitle>
+              <DialogTitle className="text-2xl text-foreground">Schedule New Message</DialogTitle>
               <DialogDescription className="text-muted-foreground">
-                Set up an automated SMS notification
+                Set up an automated SMS notification for your contacts
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-4">
+            <div className="space-y-6 py-4">
+              {/* Campaign Title */}
               <div>
-                <label className="text-sm font-medium text-foreground">Campaign Title</label>
+                <label className="text-sm font-medium text-foreground">Campaign Title *</label>
                 <Input
-                  placeholder="e.g., Exam Reminder"
-                  className="bg-secondary border-border text-foreground mt-1"
+                  placeholder="e.g., Exam Reminder, Important Notice"
+                  className={`bg-secondary text-foreground mt-2 h-10 ${
+                    validationErrors.name ? 'border-red-500 border-2' : 'border-border'
+                  }`}
                   value={newCampaign.name}
-                  onChange={(e) => setNewCampaign({ ...newCampaign, name: e.target.value })}
+                  onChange={(e) => {
+                    setNewCampaign({ ...newCampaign, name: e.target.value })
+                    setValidationErrors(prev => ({ ...prev, name: !e.target.value.trim() }))
+                  }}
                 />
               </div>
+
+              {/* Message Content */}
               <div>
-                <label className="text-sm font-medium text-foreground">Message Content</label>
+                <label className="text-sm font-medium text-foreground">Message Content *</label>
                 <Textarea
-                  placeholder="Type your message..."
-                  className="bg-secondary border-border text-foreground mt-1 min-h-20"
+                  placeholder="Type your message here. Keep it clear and concise..."
+                  className={`bg-secondary text-foreground mt-2 min-h-24 resize-none ${
+                    validationErrors.messageContent ? 'border-red-500 border-2' : 'border-border'
+                  }`}
                   value={newCampaign.messageContent}
-                  onChange={(e) => setNewCampaign({ ...newCampaign, messageContent: e.target.value })}
+                  onChange={(e) => {
+                    setNewCampaign({ ...newCampaign, messageContent: e.target.value })
+                    setValidationErrors(prev => ({ ...prev, messageContent: !e.target.value.trim() }))
+                  }}
                 />
-              </div>
-              <div>
-                <label className="text-sm font-medium text-foreground">Send To</label>
-                <div className="flex gap-4 mt-2">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="targetType"
-                      value="contacts"
-                      checked={targetType === 'contacts'}
-                      onChange={(e) => {
-                        setTargetType('contacts')
-                        setSelectedTargets([])
-                        setSearchTerm('')
-                      }}
-                      className="w-4 h-4"
-                    />
-                    <span className="text-sm text-foreground">Individual Contacts</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="targetType"
-                      value="groups"
-                      checked={targetType === 'groups'}
-                      onChange={(e) => {
-                        setTargetType('groups')
-                        setSelectedTargets([])
-                        setSearchTerm('')
-                      }}
-                      className="w-4 h-4"
-                    />
-                    <span className="text-sm text-foreground">Contact Groups</span>
-                  </label>
-                </div>
+                <p className="text-xs text-muted-foreground mt-1">Character count: {newCampaign.messageContent.length}</p>
               </div>
 
               {/* Recipients Selection */}
               <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-sm font-medium text-foreground">
-                    Select {targetType === 'contacts' ? 'Contacts' : 'Groups'} ({selectedTargets.length})
-                  </label>
-                </div>
-                <Input
-                  placeholder="Search..."
-                  className="bg-secondary border-border text-foreground mb-2"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-                <div className="border border-border rounded-lg bg-secondary/50 max-h-48 overflow-y-auto p-2 space-y-2">
-                  {filteredTargets.length > 0 ? (
-                    filteredTargets.map(target => (
-                      <div key={target.id} className="flex items-center gap-2 p-2 hover:bg-secondary rounded cursor-pointer">
-                        <Checkbox
-                          checked={selectedTargets.includes(target.id)}
-                          onCheckedChange={() => toggleTarget(target.id)}
-                          className="w-4 h-4"
+                <label className={`text-sm font-medium block mb-3 ${
+                  validationErrors.recipients ? 'text-red-500' : 'text-foreground'
+                }`}>
+                  Select Recipients * {validationErrors.recipients && <span className="text-red-500 font-bold">Required</span>}
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <Dialog open={showContactsModal} onOpenChange={setShowContactsModal}>
+                    <DialogTrigger asChild>
+                      <Button 
+                        className={`h-24 flex flex-col items-center justify-center gap-2 font-semibold text-white ${
+                          targetType === 'contacts' && selectedTargets.length > 0
+                            ? 'bg-blue-600 hover:bg-blue-700'
+                            : 'bg-blue-500 hover:bg-blue-600'
+                        }`}
+                      >
+                        <Users className="w-6 h-6" />
+                        <span className="text-sm font-bold">Select Contacts</span>
+                        {targetType === 'contacts' && selectedTargets.length > 0 && (
+                          <span className="text-xs bg-white text-blue-600 px-2 py-1 rounded">{selectedTargets.length} selected</span>
+                        )}
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="bg-card border-border text-foreground max-w-lg">
+                      <DialogHeader>
+                        <DialogTitle>Select Contacts ({selectedTargets.length})</DialogTitle>
+                      </DialogHeader>
+                      <div className="space-y-3">
+                        <Input
+                          placeholder="Search contacts by name or phone..."
+                          className="bg-secondary border-border text-foreground"
+                          value={searchTerm}
+                          onChange={(e) => setSearchTerm(e.target.value)}
                         />
-                        <label className="flex-1 cursor-pointer text-sm text-foreground">
-                          {('name' in target) ? target.name : target.name}
-                          {targetType === 'contacts' && 'phoneNumber' in target && (
-                            <span className="ml-2 text-xs text-muted-foreground">{target.phoneNumber}</span>
+                        <div className="border border-border rounded-lg bg-secondary/50 max-h-96 overflow-y-auto p-3 space-y-2">
+                          {contactsData?.contacts && contactsData.contacts.length > 0 ? (
+                            filteredContacts.map(contact => (
+                              <div key={contact.id} className="flex items-center gap-2 p-2 hover:bg-secondary rounded">
+                                <Checkbox
+                                  checked={selectedTargets.includes(contact.id)}
+                                  onCheckedChange={() => toggleTarget(contact.id)}
+                                  className="w-4 h-4"
+                                />
+                                <label className="flex-1 cursor-pointer text-sm">
+                                  <p className="font-medium">{contact.name}</p>
+                                  <p className="text-xs text-muted-foreground">{contact.phoneNumber}</p>
+                                </label>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="text-center py-8 text-muted-foreground">
+                              No contacts found
+                            </div>
                           )}
-                        </label>
+                        </div>
                       </div>
-                    ))
-                  ) : (
-                    <div className="text-center py-4 text-muted-foreground text-sm">
-                      No {targetType === 'contacts' ? 'contacts' : 'groups'} found
-                    </div>
-                  )}
+                      <Button 
+                        onClick={() => {
+                          setTargetType('contacts')
+                          setShowContactsModal(false)
+                        }}
+                        className="w-full bg-primary hover:bg-primary/90"
+                        disabled={selectedTargets.length === 0}
+                      >
+                        Confirm ({selectedTargets.length} contacts)
+                      </Button>
+                    </DialogContent>
+                  </Dialog>
+
+                  <Dialog open={showGroupsModal} onOpenChange={setShowGroupsModal}>
+                    <DialogTrigger asChild>
+                      <Button 
+                        className={`h-24 flex flex-col items-center justify-center gap-2 font-semibold text-white ${
+                          targetType === 'groups' && selectedTargets.length > 0
+                            ? 'bg-purple-600 hover:bg-purple-700'
+                            : 'bg-purple-500 hover:bg-purple-600'
+                        }`}
+                      >
+                        <Users className="w-6 h-6" />
+                        <span className="text-sm font-bold">Select Groups</span>
+                        {targetType === 'groups' && selectedTargets.length > 0 && (
+                          <span className="text-xs bg-white text-purple-600 px-2 py-1 rounded">{selectedTargets.length} selected</span>
+                        )}
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="bg-card border-border text-foreground max-w-lg">
+                      <DialogHeader>
+                        <DialogTitle>Select Groups ({selectedTargets.length})</DialogTitle>
+                      </DialogHeader>
+                      <div className="space-y-3">
+                        <Input
+                          placeholder="Search groups..."
+                          className="bg-secondary border-border text-foreground"
+                          value={searchTerm}
+                          onChange={(e) => setSearchTerm(e.target.value)}
+                        />
+                        <div className="border border-border rounded-lg bg-secondary/50 max-h-96 overflow-y-auto p-3 space-y-2">
+                          {groupsData?.groups && groupsData.groups.length > 0 ? (
+                            filteredGroups.map(group => (
+                              <div key={group.id} className="flex items-center gap-2 p-2 hover:bg-secondary rounded">
+                                <Checkbox
+                                  checked={selectedTargets.includes(group.id)}
+                                  onCheckedChange={() => toggleTarget(group.id)}
+                                  className="w-4 h-4"
+                                />
+                                <label className="flex-1 cursor-pointer text-sm font-medium">
+                                  {group.name}
+                                </label>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="text-center py-8 text-muted-foreground">
+                              No groups found
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <Button 
+                        onClick={() => {
+                          setTargetType('groups')
+                          setShowGroupsModal(false)
+                        }}
+                        className="w-full bg-primary hover:bg-primary/90"
+                        disabled={selectedTargets.length === 0}
+                      >
+                        Confirm ({selectedTargets.length} groups)
+                      </Button>
+                    </DialogContent>
+                  </Dialog>
                 </div>
+                {selectedTargets.length > 0 && (
+                  <p className="text-xs text-muted-foreground mt-2">
+                    ✅ {selectedTargets.length} {targetType === 'contacts' ? 'contact(s)' : 'group(s)'} selected
+                  </p>
+                )}
               </div>
 
+              {/* Schedule Date & Time - MODERN PICKER */}
               <div>
-                <label className="text-sm font-medium text-foreground">Schedule Date & Time</label>
-                <Input
-                  type="datetime-local"
-                  className="bg-secondary border-border text-foreground mt-1"
-                  value={newCampaign.scheduledAt}
-                  onChange={(e) => setNewCampaign({ ...newCampaign, scheduledAt: e.target.value })}
-                />
+                <label className={`text-sm font-medium block mb-3 ${
+                  validationErrors.scheduledAt ? 'text-red-500' : 'text-foreground'
+                }`}>
+                  Schedule Date & Time * {validationErrors.scheduledAt && <span className="text-red-500 font-bold text-xs">Required</span>}
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="relative">
+                    <input
+                      type="date"
+                      className={`w-full px-3 py-2.5 bg-secondary text-foreground border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary transition-all ${
+                        validationErrors.scheduledAt ? 'border-red-500' : 'border-border'
+                      }`}
+                      min={(() => {
+                        const today = new Date()
+                        const year = today.getFullYear()
+                        const month = String(today.getMonth() + 1).padStart(2, '0')
+                        const day = String(today.getDate()).padStart(2, '0')
+                        return `${year}-${month}-${day}`
+                      })()}
+                      value={newCampaign.scheduledAt ? newCampaign.scheduledAt.split('T')[0] : (() => {
+                        const today = new Date()
+                        const year = today.getFullYear()
+                        const month = String(today.getMonth() + 1).padStart(2, '0')
+                        const day = String(today.getDate()).padStart(2, '0')
+                        return `${year}-${month}-${day}`
+                      })()}
+                      onChange={(e) => {
+                        const date = e.target.value
+                        const time = newCampaign.scheduledAt ? newCampaign.scheduledAt.split('T')[1] : new Date().toTimeString().slice(0, 5)
+                        const newDateTime = `${date}T${time}`
+                        setNewCampaign({ ...newCampaign, scheduledAt: newDateTime })
+                        setValidationErrors(prev => ({ ...prev, scheduledAt: false }))
+                      }}
+                    />
+                  </div>
+                  <div className="relative">
+                    <input
+                      type="time"
+                      className={`w-full px-3 py-2.5 bg-secondary text-foreground border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary transition-all ${
+                        validationErrors.scheduledAt ? 'border-red-500' : 'border-border'
+                      }`}
+                      min={
+                        newCampaign.scheduledAt?.split('T')[0] === new Date().toISOString().split('T')[0]
+                          ? (() => {
+                              const now = new Date()
+                              now.setMinutes(now.getMinutes() + 1)
+                              const hours = String(now.getHours()).padStart(2, '0')
+                              const minutes = String(now.getMinutes()).padStart(2, '0')
+                              return `${hours}:${minutes}`
+                            })()
+                          : '00:00'
+                      }
+                      value={newCampaign.scheduledAt ? newCampaign.scheduledAt.split('T')[1] : new Date().toTimeString().slice(0, 5)}
+                      onChange={(e) => {
+                        const time = e.target.value
+                        const date = newCampaign.scheduledAt ? newCampaign.scheduledAt.split('T')[0] : new Date().toISOString().split('T')[0]
+                        const newDateTime = `${date}T${time}`
+                        setNewCampaign({ ...newCampaign, scheduledAt: newDateTime })
+                        setValidationErrors(prev => ({ ...prev, scheduledAt: false }))
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="mt-4 p-3 bg-primary/10 border border-primary/20 rounded-lg">
+                  <p className="text-sm font-medium flex items-center gap-2 text-foreground">
+                    <span>✓</span>
+                    {newCampaign.scheduledAt 
+                      ? `${new Date(newCampaign.scheduledAt).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} at ${new Date(newCampaign.scheduledAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`
+                      : 'Select date and time'
+                    }
+                  </p>
+                </div>
               </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex gap-3 pt-4 border-t border-divider">
               <Button
-                className="w-full bg-primary hover:bg-primary/90"
+                className="flex-1 bg-primary hover:bg-primary/90"
                 onClick={handleSchedule}
                 disabled={isCreating}
               >
-                {isCreating ? 'Scheduling...' : 'Schedule Message'}
+                {isCreating ? (
+                  <>
+                    <Loader className="w-4 h-4 animate-spin mr-2" />
+                    Scheduling...
+                  </>
+                ) : (
+                  'Schedule Message'
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                className="flex-1 border-border"
+                onClick={() => setDialogOpen(false)}
+              >
+                Cancel
               </Button>
             </div>
           </DialogContent>
@@ -478,17 +716,7 @@ export default function Scheduler() {
         </CardContent>
       </Card>
 
-      {/* Tips */}
-      <Card className="bg-secondary border-border">
-        <CardHeader>
-          <CardTitle className="text-sm font-semibold text-foreground">Pro Tips</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm text-muted-foreground space-y-2">
-          <p>• Schedule important reminders in advance to ensure timely delivery</p>
-          <p>• Scheduled messages will be sent at the specified time</p>
-          <p>• Track delivery status in real-time through the dashboard</p>
-        </CardContent>
-      </Card>
+     
     </div>
   )
 }
