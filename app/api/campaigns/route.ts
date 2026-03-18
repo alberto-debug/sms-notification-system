@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { executeQuery } from '@/lib/db'
+import { scheduleMessageJob } from '@/lib/scheduler'
 
 export async function GET(request: NextRequest) {
   try {
@@ -80,6 +81,16 @@ export async function POST(request: NextRequest) {
        VALUES (?, ?, ?, ?, ?, 'scheduled', ?, ?)`,
       [userId, name, messageContent, targetType, JSON.stringify(targets), totalRecipients, scheduledAt]
     )
+
+    // Schedule the message to be sent at the specified time
+    scheduleMessageJob({
+      id: result.insertId,
+      user_id: userId,
+      message_content: messageContent,
+      target_type: targetType,
+      targets: JSON.stringify(targets),
+      scheduled_at: scheduledAt,
+    })
 
     return NextResponse.json({
       campaign: {

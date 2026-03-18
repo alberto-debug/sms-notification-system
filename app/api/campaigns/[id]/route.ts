@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { executeQuery } from '@/lib/db'
+import { cancelScheduledJob } from '@/lib/scheduler'
 
 export async function PUT(
   request: NextRequest,
@@ -43,6 +44,9 @@ export async function PUT(
         `UPDATE sms_campaigns SET status = 'cancelled' WHERE id = ? AND user_id = ?`,
         [id, userId]
       )
+
+      // Cancel the scheduled job if it exists
+      cancelScheduledJob(parseInt(id))
 
       return NextResponse.json({
         success: true,
