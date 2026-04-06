@@ -33,7 +33,8 @@ interface Contact {
   id: number
   name: string
   phoneNumber: string
-  groupId?: number
+  groupIds?: number[]
+  groupNames?: string[]
 }
 
 interface ContactGroup {
@@ -64,8 +65,8 @@ export default function Scheduler() {
     messageContent: '',
     scheduledAt: getCurrentDateTime(),
   })
-  const [targetType, setTargetType] = useState<'contacts' | 'groups'>('contacts')
-  const [selectedTargets, setSelectedTargets] = useState<number[]>([])
+  const [selectedContacts, setSelectedContacts] = useState<number[]>([])
+  const [selectedGroups, setSelectedGroups] = useState<number[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [isCreating, setIsCreating] = useState(false)
   const [cancellingId, setCancellingId] = useState<number | null>(null)
@@ -81,6 +82,16 @@ export default function Scheduler() {
   }>({
     scheduledAt: false // Initialize as false (valid)
   })
+  const [showDuplicateDialog, setShowDuplicateDialog] = useState(false)
+  const [duplicateInfo, setDuplicateInfo] = useState<{
+    type: 'contact-in-group' | 'contact-in-multiple-groups'
+    duplicates: Array<{
+      contactId: number
+      contactName: string
+      contactPhone: string
+      locations: string[]
+    }>
+  } | null>(null)
   const { data, isLoading, error, refetch } = useFetch<{ campaigns: Campaign[] }>(
     '/api/campaigns',
     { userId: user?.id }
@@ -112,7 +123,117 @@ export default function Scheduler() {
 
   // Function to get count of contacts in a group (same as composer)
   const getGroupContactCount = (groupId: number): number => {
-    return (contactsData?.contacts || []).filter(c => c.groupId === groupId).length
+    return (contactsData?.contacts || []).filter(c => c.groupIds?.includes(groupId)).length
+  }
+
+  // Check for duplicate contacts across selections (same as composer)
+  const checkForDuplicates = (): boolean => {
+    const selectedContactIds = new Set(selectedContacts)
+    const groupContactIds = new Map<number, number[]>()
+    const contactIdToNames = new Map<number, { name: string; phone: string }>()
+
+    // Build map of contacts in each group
+    for (const groupId of selectedGroups) {
+      const groupContacts = contactsData?.contacts?.filter(c =>
+        c.groupIds?.includes(groupId)
+      ) || []
+      groupContactIds.set(groupId, groupContacts.map(c => c.id))
+      groupContacts.forEach(c => {
+        contactIdToNames.set(c.id, { name: c.name, phone: c.phoneNumber })
+      })
+    }
+
+    // Also map individually selected contacts
+    filteredContacts.forEach(c => {
+      if (selectedContactIds.has(c.id)) {
+        contactIdToNames.set(c.id, { name: c.name, phone: c.phoneNumber })
+      }
+    })
+
+    // Find duplicates
+    const duplicates: Array<{
+      contactId: number
+      contactName: string
+      contactPhone: string
+      locations: string[]
+    }> = []
+
+    const contactLocations = new Map<number, Set<string>>()
+
+    // Add individually selected contacts
+    selectedContacts.forEach(contactId => {
+      if (!contactLocations.has(contactId)) {
+        contactLocations.set(contactId, new Set())
+      }
+      contactLocations.get(contactId)!.add('Individual Selection')
+    })
+
+    // Add contacts from groups
+    for (const [groupId, contactIds] of groupContactIds) {
+      const groupName = groupsData?.groups?.find(g => g.id === groupId)?.name || `Group ${groupId}`
+      contactIds.forEach(contactId => {
+        if (!contactLocations.has(contactId)) {
+          contactLocations.set(contactId, new Set())
+        }
+        contactLocations.get(contactId)!.add(groupName)
+      })
+    }
+
+    // Check if any contact appears in multiple locations
+    for (const [contactId, locations] of contactLocations) {
+      if (locations.size > 1) {
+        const contactInfo = contactIdToNames.get(contactId)
+        if (contactInfo) {
+          duplicates.push({
+            contactId,
+            contactName: contactInfo.name,
+            contactPhone: contactInfo.phone,
+            locations: Array.from(locations),
+          })
+        }
+      }
+    }
+
+    if (duplicates.length > 0) {
+      // Determine duplicate type
+      const hasIndividual = duplicates.some(d => d.locations.includes('Individual Selection'))
+      const type = hasIndividual ? 'contact-in-group' : 'contact-in-multiple-groups'
+
+      setDuplicateInfo({
+        type,
+        duplicates,
+      })
+      setShowDuplicateDialog(true)
+      return true
+    }
+
+    return false
+  }
+
+  // Auto-resolve duplicates (same as composer)
+  const resolveDuplicates = (removeIndividual: boolean) => {
+    if (!duplicateInfo) return
+
+    const duplicateContactIds = new Set(duplicateInfo.duplicates.map(d => d.contactId))
+
+    if (duplicateInfo.type === 'contact-in-group' && removeIndividual) {
+      // Remove individually selected duplicate contacts
+      setSelectedContacts(prev =>
+        prev.filter(id => !duplicateContactIds.has(id))
+      )
+      toast.success('Duplicates Resolved', {
+        description: 'Duplicate individual contacts removed. Only group selections will be used.',
+      })
+    } else if (duplicateInfo.type === 'contact-in-multiple-groups') {
+      // For multiple group duplicates, user needs to manually remove
+      toast.info('Manual Removal Required', {
+        description: 'Please remove the contact from one of the groups to avoid duplication.',
+      })
+      return
+    }
+
+    setShowDuplicateDialog(false)
+    setDuplicateInfo(null)
   }
 
   const handleSchedule = async () => {
@@ -131,7 +252,7 @@ export default function Scheduler() {
       if (!newCampaign.name.trim()) errors.name = true
       if (!newCampaign.messageContent.trim()) errors.messageContent = true
       if (!newCampaign.scheduledAt) errors.scheduledAt = true
-      if (selectedTargets.length === 0) errors.recipients = true
+      if (selectedContacts.length === 0 && selectedGroups.length === 0) errors.recipients = true
       
       // Validate time is not in the past
       if (newCampaign.scheduledAt && !errors.scheduledAt) {
@@ -171,17 +292,27 @@ export default function Scheduler() {
         return
       }
 
+      // Check for duplicate contacts (allows both individual and group selections)
+      if ((selectedContacts.length > 0 || selectedGroups.length > 0) && checkForDuplicates()) {
+        return // Dialog will be shown by checkForDuplicates
+      }
+
       setIsCreating(true)
       await createCampaign({
         userId: user?.id,
         name: newCampaign.name,
         messageContent: newCampaign.messageContent,
         scheduledAt: newCampaign.scheduledAt,
-        targetType,
-        targets: selectedTargets,
+        targets: [...selectedContacts, ...selectedGroups], // Combine both
+        targetType: selectedContacts.length > 0 && selectedGroups.length > 0 
+          ? 'mixed' 
+          : selectedContacts.length > 0 
+            ? 'contacts' 
+            : 'groups',
       })
       setNewCampaign({ name: '', messageContent: '', scheduledAt: getCurrentDateTime() })
-      setSelectedTargets([])
+      setSelectedContacts([])
+      setSelectedGroups([])
       setSearchTerm('')
       setValidationErrors({})
       setDialogOpen(false)
@@ -200,10 +331,18 @@ export default function Scheduler() {
     }
   }
 
-  const toggleTarget = (id: number) => {
-    setSelectedTargets(prev => {
+  const toggleContact = (id: number) => {
+    setSelectedContacts(prev => {
       const updated = prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
-      setValidationErrors(prevErrors => ({ ...prevErrors, recipients: updated.length === 0 }))
+      setValidationErrors(prevErrors => ({ ...prevErrors, recipients: updated.length === 0 && selectedGroups.length === 0 }))
+      return updated
+    })
+  }
+
+  const toggleGroup = (id: number) => {
+    setSelectedGroups(prev => {
+      const updated = prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
+      setValidationErrors(prevErrors => ({ ...prevErrors, recipients: updated.length === 0 && selectedContacts.length === 0 }))
       return updated
     })
   }
@@ -277,6 +416,76 @@ export default function Scheduler() {
 
   return (
     <div className="p-8 space-y-8">
+      {/* Duplicate Detection Dialog */}
+      <Dialog open={showDuplicateDialog} onOpenChange={setShowDuplicateDialog}>
+        <DialogContent className="bg-card border-border">
+          <DialogHeader>
+            <DialogTitle className="text-foreground">
+              ⚠️ Duplicate Contacts Detected
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              {duplicateInfo?.type === 'contact-in-group'
+                ? 'The same contact appears in both your individual selection and in a selected group. This will cause duplicate messages.'
+                : 'The same contact appears in multiple selected groups. This will cause duplicate messages.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {duplicateInfo && (
+            <div className="space-y-4">
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {duplicateInfo.duplicates.map((dup, idx) => (
+                  <div key={idx} className="p-3 bg-secondary rounded-lg border border-border">
+                    <p className="font-semibold text-foreground">{dup.contactName}</p>
+                    <p className="text-sm text-muted-foreground">{dup.contactPhone}</p>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {dup.locations.map((loc, i) => (
+                        <Badge key={i} variant="outline" className="text-xs">
+                          {loc}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex gap-2 pt-4">
+                {duplicateInfo.type === 'contact-in-group' && (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowDuplicateDialog(false)}
+                      className="flex-1"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={() => resolveDuplicates(true)}
+                      className="flex-1 bg-green-600 hover:bg-green-700"
+                    >
+                      Auto-Remove Individual & Schedule
+                    </Button>
+                  </>
+                )}
+                {duplicateInfo.type === 'contact-in-multiple-groups' && (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowDuplicateDialog(false)}
+                      className="flex-1"
+                    >
+                      Cancel & Edit
+                    </Button>
+                    <Button disabled className="flex-1">
+                      Manual Removal Required
+                    </Button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -292,7 +501,8 @@ export default function Scheduler() {
               messageContent: '',
               scheduledAt: getCurrentDateTime(),
             })
-            setSelectedTargets([])
+            setSelectedContacts([])
+            setSelectedGroups([])
             setSearchTerm('')
             setValidationErrors({ scheduledAt: false, name: false, messageContent: false, recipients: false })
           }
@@ -303,7 +513,7 @@ export default function Scheduler() {
               Schedule Message
             </Button>
           </DialogTrigger>
-          <DialogContent className="bg-card border-border text-foreground w-full max-w-5xl max-h-[95vh] overflow-y-auto">
+          <DialogContent className="bg-card border-border text-foreground w-full max-w-6xl max-h-[98vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="text-2xl text-foreground">Schedule New Message</DialogTitle>
               <DialogDescription className="text-muted-foreground">
@@ -356,21 +566,21 @@ export default function Scheduler() {
                     <DialogTrigger asChild>
                       <Button 
                         className={`h-24 flex flex-col items-center justify-center gap-2 font-semibold text-white ${
-                          targetType === 'contacts' && selectedTargets.length > 0
+                          selectedContacts.length > 0
                             ? 'bg-blue-600 hover:bg-blue-700'
                             : 'bg-blue-500 hover:bg-blue-600'
                         }`}
                       >
                         <Users className="w-6 h-6" />
                         <span className="text-sm font-bold">Select Contacts</span>
-                        {targetType === 'contacts' && selectedTargets.length > 0 && (
-                          <span className="text-xs bg-white text-blue-600 px-2 py-1 rounded">{selectedTargets.length} selected</span>
+                        {selectedContacts.length > 0 && (
+                          <span className="text-xs bg-white text-blue-600 px-2 py-1 rounded">{selectedContacts.length} selected</span>
                         )}
                       </Button>
                     </DialogTrigger>
-                    <DialogContent className="bg-card border-border text-foreground max-w-lg">
+                    <DialogContent className="bg-card border-border text-foreground max-w-2xl max-h-96">
                       <DialogHeader>
-                        <DialogTitle>Select Contacts ({selectedTargets.length})</DialogTitle>
+                        <DialogTitle>Select Contacts ({selectedContacts.length})</DialogTitle>
                       </DialogHeader>
                       <div className="space-y-3">
                         <Input
@@ -379,13 +589,13 @@ export default function Scheduler() {
                           value={searchTerm}
                           onChange={(e) => setSearchTerm(e.target.value)}
                         />
-                        <div className="border border-border rounded-lg bg-secondary/50 max-h-96 overflow-y-auto p-3 space-y-2">
+                        <div className="border border-border rounded-lg bg-secondary/50 max-h-64 overflow-y-auto p-3 space-y-2">
                           {contactsData?.contacts && contactsData.contacts.length > 0 ? (
                             filteredContacts.map(contact => (
                               <div key={contact.id} className="flex items-center gap-2 p-2 hover:bg-secondary rounded">
                                 <Checkbox
-                                  checked={selectedTargets.includes(contact.id)}
-                                  onCheckedChange={() => toggleTarget(contact.id)}
+                                  checked={selectedContacts.includes(contact.id)}
+                                  onCheckedChange={() => toggleContact(contact.id)}
                                   className="w-4 h-4"
                                 />
                                 <label className="flex-1 cursor-pointer text-sm">
@@ -402,14 +612,10 @@ export default function Scheduler() {
                         </div>
                       </div>
                       <Button 
-                        onClick={() => {
-                          setTargetType('contacts')
-                          setShowContactsModal(false)
-                        }}
+                        onClick={() => setShowContactsModal(false)}
                         className="w-full bg-primary hover:bg-primary/90"
-                        disabled={selectedTargets.length === 0}
                       >
-                        Confirm ({selectedTargets.length} contacts)
+                        Confirm ({selectedContacts.length} contacts)
                       </Button>
                     </DialogContent>
                   </Dialog>
@@ -418,21 +624,21 @@ export default function Scheduler() {
                     <DialogTrigger asChild>
                       <Button 
                         className={`h-24 flex flex-col items-center justify-center gap-2 font-semibold text-white ${
-                          targetType === 'groups' && selectedTargets.length > 0
+                          selectedGroups.length > 0
                             ? 'bg-purple-600 hover:bg-purple-700'
                             : 'bg-purple-500 hover:bg-purple-600'
                         }`}
                       >
                         <Users className="w-6 h-6" />
                         <span className="text-sm font-bold">Select Groups</span>
-                        {targetType === 'groups' && selectedTargets.length > 0 && (
-                          <span className="text-xs bg-white text-purple-600 px-2 py-1 rounded">{selectedTargets.length} selected</span>
+                        {selectedGroups.length > 0 && (
+                          <span className="text-xs bg-white text-purple-600 px-2 py-1 rounded">{selectedGroups.length} selected</span>
                         )}
                       </Button>
                     </DialogTrigger>
-                    <DialogContent className="bg-card border-border text-foreground max-w-lg">
+                    <DialogContent className="bg-card border-border text-foreground max-w-2xl max-h-96">
                       <DialogHeader>
-                        <DialogTitle>Select Groups ({selectedTargets.length})</DialogTitle>
+                        <DialogTitle>Select Groups ({selectedGroups.length})</DialogTitle>
                       </DialogHeader>
                       <div className="space-y-3">
                         <Input
@@ -441,7 +647,7 @@ export default function Scheduler() {
                           value={searchTerm}
                           onChange={(e) => setSearchTerm(e.target.value)}
                         />
-                        <div className="border border-border rounded-lg bg-secondary/50 max-h-96 overflow-y-auto p-3 space-y-2">
+                        <div className="border border-border rounded-lg bg-secondary/50 max-h-64 overflow-y-auto p-3 space-y-2">
                           {groupsData?.groups && groupsData.groups.length > 0 ? (
                             filteredGroups.map(group => {
                               const memberCount = getGroupContactCount(group.id)
@@ -456,8 +662,8 @@ export default function Scheduler() {
                                   }`}
                                 >
                                   <Checkbox
-                                    checked={selectedTargets.includes(group.id)}
-                                    onCheckedChange={() => !isDisabled && toggleTarget(group.id)}
+                                    checked={selectedGroups.includes(group.id)}
+                                    onCheckedChange={() => !isDisabled && toggleGroup(group.id)}
                                     disabled={isDisabled}
                                     className="w-4 h-4"
                                   />
@@ -478,21 +684,17 @@ export default function Scheduler() {
                         </div>
                       </div>
                       <Button 
-                        onClick={() => {
-                          setTargetType('groups')
-                          setShowGroupsModal(false)
-                        }}
+                        onClick={() => setShowGroupsModal(false)}
                         className="w-full bg-primary hover:bg-primary/90"
-                        disabled={selectedTargets.length === 0}
                       >
-                        Confirm ({selectedTargets.length} groups)
+                        Confirm ({selectedGroups.length} groups)
                       </Button>
                     </DialogContent>
                   </Dialog>
                 </div>
-                {selectedTargets.length > 0 && (
+                {(selectedContacts.length > 0 || selectedGroups.length > 0) && (
                   <p className="text-xs text-muted-foreground mt-2">
-                    ✅ {selectedTargets.length} {targetType === 'contacts' ? 'contact(s)' : 'group(s)'} selected
+                    ✅ {selectedContacts.length + selectedGroups.length} recipient selection(s) made
                   </p>
                 )}
               </div>

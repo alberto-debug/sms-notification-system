@@ -122,6 +122,12 @@ export async function POST(request: NextRequest) {
 
       // Save successful messages
       for (const success of bulkResult.successful) {
+        console.log(`💾 Saving successful message to DB:`, {
+          phone: success.phone,
+          messageId: success.messageId,
+          cost: success.cost,
+        })
+        
         const result: any = await executeQuery(
           `INSERT INTO sms_messages 
            (user_id, recipient_phone, message_content, status, sent_at, provider_message_id) 
@@ -140,6 +146,12 @@ export async function POST(request: NextRequest) {
 
       // Save failed messages
       for (const failure of bulkResult.failed) {
+        console.log(`❌ Saving failed message to DB:`, {
+          phone: failure.phone,
+          error: failure.error,
+          statusCode: failure.statusCode,
+        })
+        
         const result: any = await executeQuery(
           `INSERT INTO sms_messages 
            (user_id, recipient_phone, message_content, status, error_message) 

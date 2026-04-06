@@ -92,6 +92,10 @@ export async function POST(request: NextRequest) {
         // Map Africa's Talking status to our status
         const mappedStatus = mapAfricasTalkingStatus(status)
 
+        console.log(
+          `📊 Mapping provider status: "${status}" -> "${mappedStatus}" (failureReason: ${failureReason || 'none'})`
+        )
+
         // Build update query - only set delivered_at for delivered status
         let updateQuery = `
           UPDATE sms_messages 
@@ -103,6 +107,8 @@ export async function POST(request: NextRequest) {
         
         if (mappedStatus === 'delivered') {
           updateQuery += ', delivered_at = NOW()'
+        } else if (mappedStatus === 'failed') {
+          // Note: We don't mark a failed_at timestamp, but you could add one if needed
         }
         
         updateQuery += ' WHERE provider_message_id = ? LIMIT 1'
@@ -115,9 +121,9 @@ export async function POST(request: NextRequest) {
         ])
 
         console.log(
-          `✅ Delivery report processed: Provider ID ${providerMessageId} -> ${mappedStatus}${
+          `✅ Delivery report processed: Provider ID ${providerMessageId} -> status="${mappedStatus}"${
             failureReason ? ` (Reason: ${failureReason})` : ''
-          }`
+          } (Records updated: ${updateResult.affectedRows || 0})`
         )
 
         results.push({
@@ -169,6 +175,7 @@ export async function POST(request: NextRequest) {
  * - Rejected: rejected by MSP (FINAL)
  * - Success: successfully delivered to handset (FINAL)
  * - Failed: could not be delivered (FINAL)
+ * - DeliveryFailure: delivery failed for any reason (FINAL)
  * - AbsentSubscriber: user SIM unreachable (FINAL)
  * - Expired: discarded by telco, flagged content/sender (FINAL)
  * 
@@ -202,6 +209,7 @@ function mapAfricasTalkingStatus(
   if (
     status === 'failed' ||
     status === 'rejected' ||
+    status === 'deliveryfailure' ||
     status === 'absentsubscriber' ||
     status === 'expired' ||
     status === 'error' ||

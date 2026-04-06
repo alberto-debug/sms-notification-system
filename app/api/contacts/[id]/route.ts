@@ -39,7 +39,7 @@ export async function PUT(
     const { id } = await params
     const contactId = parseInt(id)
     const body = await request.json()
-    const { name, email, phoneNumber, groupId } = body
+    const { name, email, phoneNumber, groupIds } = body
 
     if (!contactId) {
       return NextResponse.json(
@@ -64,22 +64,36 @@ export async function PUT(
       fields.push('phone_number = ?')
       values.push(phoneNumber)
     }
-    if (groupId !== undefined) {
-      fields.push('group_id = ?')
-      values.push(groupId)
+
+    if (fields.length > 0) {
+      values.push(contactId)
+      const query = `UPDATE contacts SET ${fields.join(', ')} WHERE id = ?`
+      await executeQuery(query, values)
     }
 
-    if (fields.length === 0) {
+    // Handle group mappings if provided
+    if (Array.isArray(groupIds)) {
+      // Delete existing mappings
+      await executeQuery(
+        'DELETE FROM contact_group_mapping WHERE contact_id = ?',
+        [contactId]
+      )
+      
+      // Insert new mappings
+      for (const groupId of groupIds) {
+        await executeQuery(
+          'INSERT INTO contact_group_mapping (contact_id, group_id) VALUES (?, ?)',
+          [contactId, groupId]
+        )
+      }
+    }
+
+    if (fields.length === 0 && groupIds === undefined) {
       return NextResponse.json(
         { error: 'No fields to update' },
         { status: 400 }
       )
     }
-
-    values.push(contactId)
-    const query = `UPDATE contacts SET ${fields.join(', ')} WHERE id = ?`
-
-    await executeQuery(query, values)
 
     return NextResponse.json({ success: true })
   } catch (error) {

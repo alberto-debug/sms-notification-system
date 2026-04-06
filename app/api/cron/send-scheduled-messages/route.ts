@@ -77,12 +77,27 @@ export async function GET(request: NextRequest) {
             `SELECT id, phone_number FROM contacts WHERE user_id = ? AND id IN (${placeholders})`,
             [campaign.user_id, ...targets]
           )
-        } else {
-          // target_type === 'groups'
+        } else if (campaign.target_type === 'groups') {
+          // target_type === 'groups' - use junction table
           const placeholders = targets.map(() => '?').join(',')
           recipients = await executeQuery(
-            `SELECT id, phone_number FROM contacts WHERE user_id = ? AND group_id IN (${placeholders})`,
+            `SELECT DISTINCT c.id, c.phone_number 
+             FROM contacts c
+             INNER JOIN contact_group_mapping cgm ON c.id = cgm.contact_id
+             WHERE c.user_id = ? AND cgm.group_id IN (${placeholders})`,
             [campaign.user_id, ...targets]
+          )
+        } else if (campaign.target_type === 'mixed') {
+          // Get both individual contacts AND group members (deduplicated)
+          const placeholders = targets.map(() => '?').join(',')
+          recipients = await executeQuery(
+            `SELECT DISTINCT c.id, c.phone_number FROM contacts c
+             WHERE c.user_id = ? AND c.id IN (${placeholders})
+             UNION
+             SELECT DISTINCT c.id, c.phone_number FROM contacts c
+             INNER JOIN contact_group_mapping cgm ON c.id = cgm.contact_id
+             WHERE c.user_id = ? AND cgm.group_id IN (${placeholders})`,
+            [campaign.user_id, ...targets, campaign.user_id, ...targets]
           )
         }
 

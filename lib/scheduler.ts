@@ -6,7 +6,7 @@ interface Campaign {
   id: number
   user_id: number
   message_content: string
-  target_type: 'contacts' | 'groups'
+  target_type: 'contacts' | 'groups' | 'mixed'
   targets: string
   scheduled_at: string
 }
@@ -108,6 +108,22 @@ async function sendScheduledCampaign(campaign: Campaign) {
   try {
     console.log(`📧 Sending campaign ${campaign.id}: "${campaign.message_content.substring(0, 50)}..."`)
 
+    // Verify campaign is still scheduled (could have been cancelled)
+    const currentCampaign: any = await executeQuery(
+      'SELECT status FROM sms_campaigns WHERE id = ?',
+      [campaign.id]
+    )
+
+    if (!currentCampaign || currentCampaign.length === 0) {
+      console.warn(`⚠️  Campaign ${campaign.id} not found in database, skipping`)
+      return
+    }
+
+    if (currentCampaign[0].status !== 'scheduled') {
+      console.warn(`⚠️  Campaign ${campaign.id} is ${currentCampaign[0].status}, not scheduled - SKIPPING SEND`)
+      return
+    }
+
     // Get recipients based on target type
     let recipients: any = []
     const targets = JSON.parse(campaign.targets)
@@ -118,12 +134,27 @@ async function sendScheduledCampaign(campaign: Campaign) {
         `SELECT id, phone_number FROM contacts WHERE user_id = ? AND id IN (${placeholders})`,
         [campaign.user_id, ...targets]
       )
-    } else {
-      // target_type === 'groups'
+    } else if (campaign.target_type === 'groups') {
+      // target_type === 'groups' - use junction table
       const placeholders = targets.map(() => '?').join(',')
       recipients = await executeQuery(
-        `SELECT id, phone_number FROM contacts WHERE user_id = ? AND group_id IN (${placeholders})`,
+        `SELECT DISTINCT c.id, c.phone_number 
+         FROM contacts c
+         INNER JOIN contact_group_mapping cgm ON c.id = cgm.contact_id
+         WHERE c.user_id = ? AND cgm.group_id IN (${placeholders})`,
         [campaign.user_id, ...targets]
+      )
+    } else if (campaign.target_type === 'mixed') {
+      // Get both individual contacts AND group members (deduplicated)
+      const placeholders = targets.map(() => '?').join(',')
+      recipients = await executeQuery(
+        `SELECT DISTINCT c.id, c.phone_number FROM contacts c
+         WHERE c.user_id = ? AND c.id IN (${placeholders})
+         UNION
+         SELECT DISTINCT c.id, c.phone_number FROM contacts c
+         INNER JOIN contact_group_mapping cgm ON c.id = cgm.contact_id
+         WHERE c.user_id = ? AND cgm.group_id IN (${placeholders})`,
+        [campaign.user_id, ...targets, campaign.user_id, ...targets]
       )
     }
 

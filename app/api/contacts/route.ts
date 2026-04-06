@@ -13,15 +13,33 @@ export async function GET(request: NextRequest) {
     }
 
     const results: any = await executeQuery(
-      `SELECT id, name, email, phone_number as phoneNumber, group_id as groupId, created_at as createdAt 
-       FROM contacts 
-       WHERE user_id = ? 
-       ORDER BY created_at DESC`,
+      `SELECT DISTINCT c.id, c.name, c.email, c.phone_number as phoneNumber, c.created_at as createdAt 
+       FROM contacts c
+       WHERE c.user_id = ? 
+       ORDER BY c.created_at DESC`,
       [userId]
     )
 
+    // For each contact, fetch all associated groups
+    const contactsWithGroups = await Promise.all(
+      results.map(async (contact: any) => {
+        const groups: any = await executeQuery(
+          `SELECT cgm.group_id as id, cg.name 
+           FROM contact_group_mapping cgm
+           JOIN contact_groups cg ON cgm.group_id = cg.id
+           WHERE cgm.contact_id = ?`,
+          [contact.id]
+        )
+        return {
+          ...contact,
+          groupIds: groups.map((g: any) => g.id),
+          groupNames: groups.map((g: any) => g.name),
+        }
+      })
+    )
+
     return NextResponse.json({
-      contacts: Array.isArray(results) ? results : [],
+      contacts: contactsWithGroups,
     })
   } catch (error) {
     console.error('Error fetching contacts:', error)
@@ -35,7 +53,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { userId, name, email, phoneNumber, groupId } = body
+    const { userId, name, email, phoneNumber, groupIds } = body
 
     if (!userId || !name || !phoneNumber) {
       return NextResponse.json(
@@ -45,17 +63,30 @@ export async function POST(request: NextRequest) {
     }
 
     const result: any = await executeQuery(
-      'INSERT INTO contacts (user_id, name, email, phone_number, group_id) VALUES (?, ?, ?, ?, ?)',
-      [userId, name, email || null, phoneNumber, groupId || null]
+      'INSERT INTO contacts (user_id, name, email, phone_number) VALUES (?, ?, ?, ?)',
+      [userId, name, email || null, phoneNumber]
     )
+
+    const contactId = result.insertId
+
+    // If groupIds provided, create mappings in junction table
+    if (Array.isArray(groupIds) && groupIds.length > 0) {
+      for (const groupId of groupIds) {
+        await executeQuery(
+          'INSERT INTO contact_group_mapping (contact_id, group_id) VALUES (?, ?)',
+          [contactId, groupId]
+        )
+      }
+    }
 
     return NextResponse.json({
       contact: {
-        id: result.insertId,
+        id: contactId,
         name,
         email,
         phoneNumber,
-        groupId,
+        groupIds: groupIds || [],
+        groupNames: [],
       },
     }, { status: 201 })
   } catch (error: any) {

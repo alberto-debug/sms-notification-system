@@ -26,7 +26,8 @@ interface Contact {
   name: string
   email?: string
   phoneNumber: string
-  groupId?: number
+  groupIds?: number[]
+  groupNames?: string[]
   createdAt: string
 }
 
@@ -46,6 +47,16 @@ export default function Composer() {
   const [showCreateGroupDialog, setShowCreateGroupDialog] = useState(false)
   const [sendErrors, setSendErrors] = useState<Array<{ phone: string; reason: string }>>([])
   const [showErrorDetails, setShowErrorDetails] = useState(false)
+  const [showDuplicateDialog, setShowDuplicateDialog] = useState(false)
+  const [duplicateInfo, setDuplicateInfo] = useState<{
+    type: 'contact-in-group' | 'contact-in-multiple-groups'
+    duplicates: Array<{
+      contactId: number
+      contactName: string
+      contactPhone: string
+      locations: string[] // group names or "Individual Selection"
+    }>
+  } | null>(null)
 
   const { data: groupsData, isLoading: groupsLoading, refetch: refetchGroups } = useFetch<{ groups: ContactGroup[] }>(
     '/api/contact-groups',
@@ -121,7 +132,119 @@ export default function Composer() {
   
   // Function to get count of contacts in a group
   const getGroupContactCount = (groupId: number): number => {
-    return (contactsData?.contacts || []).filter(c => c.groupId === groupId).length
+    return (contactsData?.contacts || []).filter(c => c.groupIds?.includes(groupId)).length
+  }
+
+  // Check for duplicate contacts across selections
+  const checkForDuplicates = (): boolean => {
+    if (sendMode === 'contacts') return false // No duplicates when only selecting contacts
+
+    const selectedContactIds = new Set(selectedContacts)
+    const groupContactIds = new Map<number, number[]>() // groupId -> contactIds
+    const contactIdToNames = new Map<number, { name: string; phone: string }>()
+
+    // Build map of contacts in each group
+    for (const groupId of selectedGroupsToSend) {
+      const groupContacts = contactsData?.contacts?.filter(c =>
+        c.groupIds?.includes(groupId)
+      ) || []
+      groupContactIds.set(groupId, groupContacts.map(c => c.id))
+      groupContacts.forEach(c => {
+        contactIdToNames.set(c.id, { name: c.name, phone: c.phoneNumber })
+      })
+    }
+
+    // Also map individually selected contacts
+    filteredContacts.forEach(c => {
+      if (selectedContactIds.has(c.id)) {
+        contactIdToNames.set(c.id, { name: c.name, phone: c.phoneNumber })
+      }
+    })
+
+    // Find duplicates
+    const duplicates: Array<{
+      contactId: number
+      contactName: string
+      contactPhone: string
+      locations: string[]
+    }> = []
+
+    const contactLocations = new Map<number, Set<string>>() // contactId -> groupNames/Individual
+
+    // Add individually selected contacts
+    selectedContacts.forEach(contactId => {
+      if (!contactLocations.has(contactId)) {
+        contactLocations.set(contactId, new Set())
+      }
+      contactLocations.get(contactId)!.add('Individual Selection')
+    })
+
+    // Add contacts from groups
+    for (const [groupId, contactIds] of groupContactIds) {
+      const groupName = groupsData?.groups?.find(g => g.id === groupId)?.name || `Group ${groupId}`
+      contactIds.forEach(contactId => {
+        if (!contactLocations.has(contactId)) {
+          contactLocations.set(contactId, new Set())
+        }
+        contactLocations.get(contactId)!.add(groupName)
+      })
+    }
+
+    // Check if any contact appears in multiple locations
+    for (const [contactId, locations] of contactLocations) {
+      if (locations.size > 1) {
+        const contactInfo = contactIdToNames.get(contactId)
+        if (contactInfo) {
+          duplicates.push({
+            contactId,
+            contactName: contactInfo.name,
+            contactPhone: contactInfo.phone,
+            locations: Array.from(locations),
+          })
+        }
+      }
+    }
+
+    if (duplicates.length > 0) {
+      // Determine duplicate type
+      const hasIndividual = duplicates.some(d => d.locations.includes('Individual Selection'))
+      const type = hasIndividual ? 'contact-in-group' : 'contact-in-multiple-groups'
+
+      setDuplicateInfo({
+        type,
+        duplicates,
+      })
+      setShowDuplicateDialog(true)
+      return true
+    }
+
+    return false
+  }
+
+  // Auto-resolve duplicates
+  const resolveDuplicates = (removeIndividual: boolean) => {
+    if (!duplicateInfo) return
+
+    const duplicateContactIds = new Set(duplicateInfo.duplicates.map(d => d.contactId))
+
+    if (duplicateInfo.type === 'contact-in-group' && removeIndividual) {
+      // Remove individually selected duplicate contacts
+      setSelectedContacts(prev =>
+        prev.filter(id => !duplicateContactIds.has(id))
+      )
+      toast.success('Duplicates Resolved', {
+        description: 'Duplicate individual contacts removed. Only group selections will be used.',
+      })
+    } else if (duplicateInfo.type === 'contact-in-multiple-groups') {
+      // For multiple group duplicates, user needs to manually remove
+      toast.info('Manual Removal Required', {
+        description: 'Please remove the contact from one of the groups to avoid duplication.',
+      })
+      return
+    }
+
+    setShowDuplicateDialog(false)
+    setDuplicateInfo(null)
   }
 
   // Calculate total recipients based on send mode
@@ -158,6 +281,11 @@ export default function Composer() {
       return
     }
 
+    // Check for duplicate contacts
+    if (checkForDuplicates()) {
+      return // Dialog will be shown by checkForDuplicates
+    }
+
     try {
       setIsSending(true)
       setSendErrors([])
@@ -172,7 +300,7 @@ export default function Composer() {
       } else {
         // Get phone numbers from contacts in selected groups
         const groupContacts = contactsData?.contacts?.filter(c => 
-          selectedGroupsToSend.includes(c.groupId || -1)
+          c.groupIds?.some(gId => selectedGroupsToSend.includes(gId))
         ) || []
         phoneNumbers = groupContacts.map(c => c.phoneNumber)
       }
@@ -231,6 +359,76 @@ export default function Composer() {
 
   return (
     <div className="p-8 space-y-8">
+      {/* Duplicate Detection Dialog */}
+      <Dialog open={showDuplicateDialog} onOpenChange={setShowDuplicateDialog}>
+        <DialogContent className="bg-card border-border">
+          <DialogHeader>
+            <DialogTitle className="text-foreground">
+              ⚠️ Duplicate Contacts Detected
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              {duplicateInfo?.type === 'contact-in-group'
+                ? 'The same contact appears in both your individual selection and in a selected group. This will cause duplicate messages.'
+                : 'The same contact appears in multiple selected groups. This will cause duplicate messages.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {duplicateInfo && (
+            <div className="space-y-4">
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {duplicateInfo.duplicates.map((dup, idx) => (
+                  <div key={idx} className="p-3 bg-secondary rounded-lg border border-border">
+                    <p className="font-semibold text-foreground">{dup.contactName}</p>
+                    <p className="text-sm text-muted-foreground">{dup.contactPhone}</p>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {dup.locations.map((loc, i) => (
+                        <Badge key={i} variant="outline" className="text-xs">
+                          {loc}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex gap-2 pt-4">
+                {duplicateInfo.type === 'contact-in-group' && (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowDuplicateDialog(false)}
+                      className="flex-1"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={() => resolveDuplicates(true)}
+                      className="flex-1 bg-green-600 hover:bg-green-700"
+                    >
+                      Auto-Remove Individual & Send
+                    </Button>
+                  </>
+                )}
+                {duplicateInfo.type === 'contact-in-multiple-groups' && (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowDuplicateDialog(false)}
+                      className="flex-1"
+                    >
+                      Cancel & Edit
+                    </Button>
+                    <Button disabled className="flex-1">
+                      Manual Removal Required
+                    </Button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* Header */}
       <div>
         <h1 className="text-3xl font-bold text-foreground">Compose Message</h1>

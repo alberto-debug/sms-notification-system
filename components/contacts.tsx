@@ -19,7 +19,8 @@ interface Contact {
   name: string
   email?: string
   phoneNumber: string
-  groupId?: number
+  groupIds?: number[]
+  groupNames?: string[]
   createdAt: string
 }
 
@@ -81,7 +82,7 @@ export default function Contacts() {
   }, [groupsData?.groups, searchGroupTerm])
 
   const getGroupContacts = (groupId: number) => {
-    return (data?.contacts || []).filter(c => c.groupId === groupId)
+    return (data?.contacts || []).filter(c => c.groupIds?.includes(groupId))
   }
 
   const handleCreateContact = async () => {
@@ -187,8 +188,24 @@ export default function Contacts() {
 
   const handleAddContactToGroup = async (contactId: number) => {
     try {
+      const contact = (data?.contacts || []).find(c => c.id === contactId)
+      const currentGroupIds = contact?.groupIds || []
+      
+      // Check if already in this group
+      if (selectedGroup?.id && currentGroupIds.includes(selectedGroup.id)) {
+        toast.error('Already Added', {
+          description: 'Contact is already in this group',
+        })
+        return
+      }
+      
+      // Add new group to existing groups
+      const updatedGroupIds = selectedGroup?.id 
+        ? [...currentGroupIds, selectedGroup.id]
+        : currentGroupIds
+      
       await updateContact(contactId, {
-        groupId: selectedGroup?.id,
+        groupIds: updatedGroupIds,
       })
       toast.success('Contact Added', {
         description: 'Contact has been added to the group',
@@ -204,8 +221,16 @@ export default function Contacts() {
 
   const handleRemoveContactFromGroup = async (contactId: number) => {
     try {
+      const contact = (data?.contacts || []).find(c => c.id === contactId)
+      const currentGroupIds = contact?.groupIds || []
+      
+      // Remove the currently selected group from the contact's groups
+      const updatedGroupIds = selectedGroup?.id
+        ? currentGroupIds.filter(id => id !== selectedGroup.id)
+        : currentGroupIds
+      
       await updateContact(contactId, {
-        groupId: null,
+        groupIds: updatedGroupIds,
       })
       toast.success('Contact Removed', {
         description: 'Contact has been removed from the group',
@@ -226,16 +251,22 @@ export default function Contacts() {
 
       for (const contactId of contactIds) {
         const contact = (data?.contacts || []).find(c => c.id === contactId)
+        const currentGroupIds = contact?.groupIds || []
         
         // Check if contact already in this specific group
-        if (contact?.groupId === groupForAddingContacts?.id) {
+        if (groupForAddingContacts?.id && currentGroupIds.includes(groupForAddingContacts.id)) {
           skippedCount++
           continue
         }
 
         try {
+          // Add new group to existing groups
+          const updatedGroupIds = groupForAddingContacts?.id
+            ? [...currentGroupIds, groupForAddingContacts.id]
+            : currentGroupIds
+          
           await updateContact(contactId, {
-            groupId: groupForAddingContacts?.id,
+            groupIds: updatedGroupIds,
           })
           addedCount++
         } catch (err) {
@@ -285,14 +316,14 @@ export default function Contacts() {
     }
 
     try {
-      const headers = ['Name', 'Phone Number', 'Email', 'Group']
+      const headers = ['Name', 'Phone Number', 'Email', 'Groups']
       const rows = data.contacts.map(contact => {
-        const group = (groupsData?.groups || []).find(g => g.id === contact.groupId)
+        const groupNames = contact.groupNames?.join('; ') || ''
         return [
           `"${contact.name.replace(/"/g, '""')}"`,
           contact.phoneNumber,
           contact.email ? `"${contact.email.replace(/"/g, '""')}"` : '',
-          group?.name || ''
+          groupNames
         ]
       })
 

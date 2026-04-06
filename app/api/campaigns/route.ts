@@ -66,15 +66,34 @@ export async function POST(request: NextRequest) {
     let totalRecipients = 0
     if (targetType === 'contacts') {
       totalRecipients = targets.length
-    } else {
-      // Count contacts in selected groups
-      // Generate placeholders dynamically to fix prepared statement issue
+    } else if (targetType === 'groups') {
+      // Count distinct contacts in selected groups using junction table
       const placeholders = targets.map(() => '?').join(',')
       const groupContacts: any = await executeQuery(
-        `SELECT COUNT(DISTINCT id) as count FROM contacts WHERE user_id = ? AND group_id IN (${placeholders})`,
+        `SELECT COUNT(DISTINCT c.id) as count 
+         FROM contacts c
+         INNER JOIN contact_group_mapping cgm ON c.id = cgm.contact_id
+         WHERE c.user_id = ? AND cgm.group_id IN (${placeholders})`,
         [userId, ...targets]
       )
       totalRecipients = groupContacts[0]?.count || 0
+    } else if (targetType === 'mixed') {
+      // For mixed, targets contains both contact IDs and group IDs
+      // We need to get distinct recipients from both individual contacts AND group members
+      const placeholders = targets.map(() => '?').join(',')
+      const mixedRecipients: any = await executeQuery(
+        `SELECT COUNT(DISTINCT c.id) as count 
+         FROM (
+           SELECT DISTINCT id FROM contacts WHERE user_id = ? AND id IN (${placeholders})
+           UNION
+           SELECT DISTINCT c.id FROM contacts c
+           INNER JOIN contact_group_mapping cgm ON c.id = cgm.contact_id
+           WHERE c.user_id = ? AND cgm.group_id IN (${placeholders})
+         ) as combined_contacts
+         JOIN contacts c ON combined_contacts.id = c.id`,
+        [userId, ...targets, userId, ...targets]
+      )
+      totalRecipients = mixedRecipients[0]?.count || 0
     }
 
     const result: any = await executeQuery(
@@ -89,7 +108,7 @@ export async function POST(request: NextRequest) {
       id: result.insertId,
       user_id: userId,
       message_content: messageContent,
-      target_type: targetType,
+      target_type: targetType as 'contacts' | 'groups' | 'mixed',
       targets: JSON.stringify(targets),
       scheduled_at: scheduledAt,
     })

@@ -30,9 +30,15 @@ export default function Dashboard() {
     { userId: user?.id, limit: 10000 }
   )
 
-  // Fetch contact groups separately
+  // Fetch contact groups
   const { data: groupsData, isLoading: groupsLoading } = useFetch<{ groups: any[] }>(
     '/api/contact-groups',
+    { userId: user?.id }
+  )
+
+  // Fetch contacts to count them by group
+  const { data: contactsData, isLoading: contactsLoading } = useFetch<{ contacts: any[] }>(
+    '/api/contacts',
     { userId: user?.id }
   )
 
@@ -74,6 +80,18 @@ export default function Dashboard() {
       }, []).slice(-7),
     }
   }, [messagesData?.messages])
+
+  // Calculate distribution data (groups with contact counts)
+  const distributionData = useMemo(() => {
+    if (!groupsData?.groups) return []
+    
+    const contacts = contactsData?.contacts || []
+    
+    return groupsData.groups.map(group => ({
+      name: group.name,
+      value: contacts.filter(c => c.groupIds?.includes(group.id)).length,
+    })).filter(g => g.value > 0) // Only show groups with contacts
+  }, [groupsData?.groups, contactsData?.contacts])
 
   const COLORS = [
     '#f59e0b', // amber
@@ -124,7 +142,7 @@ export default function Dashboard() {
   const deliveredPercent = (totalDelivered / maxActivityValue) * 100
   const failedPercent = (totalFailed / maxActivityValue) * 100
 
-  const isLoading = messagesLoading || groupsLoading
+  const isLoading = messagesLoading || groupsLoading || contactsLoading
 
   return (
     <div className="p-8 space-y-8 bg-gradient-to-br from-background via-background to-muted/20 min-h-screen">
@@ -258,40 +276,42 @@ export default function Dashboard() {
                 <CardDescription className="text-muted-foreground">Contact group breakdown</CardDescription>
               </CardHeader>
               <CardContent>
-                {groupsData?.groups && groupsData.groups.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={300}>
-                    <PieChart>
-                      <Pie
-                        data={groupsData?.groups || []}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={70}
-                        outerRadius={100}
-                        paddingAngle={2}
-                        dataKey="value"
-                        label={({ name, value, percent }) => `${name}: ${value} (${(percent * 100).toFixed(0)}%)`}
-                        labelLine={true}
-                      >
-                        {groupsData?.groups?.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip 
-                        contentStyle={{ 
-                          backgroundColor: 'rgba(15, 23, 42, 0.95)', 
-                          border: '1px solid rgba(148, 163, 184, 0.3)',
-                          borderRadius: '0.75rem',
-                          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
-                          padding: '12px'
-                        }}
-                        labelStyle={{ color: '#e2e8f0', fontWeight: 'bold', marginBottom: '8px' }}
-                        itemStyle={{ color: '#f5f5f5', padding: '4px 0' }}
-                        formatter={(value) => [value.toLocaleString(), 'Count']}
-                        wrapperStyle={{ outline: 'none' }}
-                      />
-                      <Legend />
-                    </PieChart>
-                  </ResponsiveContainer>
+                {distributionData.length > 0 ? (
+                  <div className="w-full h-80">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={distributionData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={70}
+                          outerRadius={100}
+                          paddingAngle={2}
+                          dataKey="value"
+                          label={({ name, value, percent }) => `${name}: ${value} (${(percent * 100).toFixed(0)}%)`}
+                          labelLine={true}
+                        >
+                          {distributionData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip 
+                          contentStyle={{ 
+                            backgroundColor: 'rgba(15, 23, 42, 0.95)', 
+                            border: '1px solid rgba(148, 163, 184, 0.3)',
+                            borderRadius: '0.75rem',
+                            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+                            padding: '12px'
+                          }}
+                          labelStyle={{ color: '#e2e8f0', fontWeight: 'bold', marginBottom: '8px' }}
+                          itemStyle={{ color: '#f5f5f5', padding: '4px 0' }}
+                          formatter={(value) => [value.toLocaleString(), 'Contacts']}
+                          wrapperStyle={{ outline: 'none' }}
+                        />
+                        <Legend />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
                 ) : (
                   <div className="text-center py-8 text-muted-foreground">
                     No distribution data available

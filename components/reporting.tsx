@@ -62,7 +62,12 @@ export default function Reporting() {
     let filtered = messages
 
     if (filterStatus !== 'all') {
-      filtered = filtered.filter(m => m.status === filterStatus)
+      // When user selects "delivered", show both sent (pending delivery) and delivered (confirmed)
+      if (filterStatus === 'delivered') {
+        filtered = filtered.filter(m => m.status === 'delivered' || m.status === 'sent')
+      } else {
+        filtered = filtered.filter(m => m.status === filterStatus)
+      }
     }
 
     if (dateFrom) {
@@ -329,41 +334,43 @@ export default function Reporting() {
                 {isLoading ? 'Loading chart data...' : 'No data available'}
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height={350}>
-                <PieChart>
-                  <Pie
-                    data={[
-                      { name: 'Delivered', value: deliveryTrend.reduce((sum, d) => sum + d.delivered, 0) },
-                      { name: 'Failed', value: deliveryTrend.reduce((sum, d) => sum + d.failed, 0) }
-                    ]}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={70}
-                    outerRadius={100}
-                    paddingAngle={2}
-                    dataKey="value"
-                    label={({ name, value, percent }) => `${name}: ${value} (${(percent * 100).toFixed(0)}%)`}
-                    labelLine={true}
-                  >
-                    <Cell fill="#10b981" />
-                    <Cell fill="#ef4444" />
-                  </Pie>
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: 'rgba(15, 23, 42, 0.95)', 
-                      border: '1px solid rgba(148, 163, 184, 0.3)',
-                      borderRadius: '0.75rem',
-                      boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
-                      padding: '12px'
-                    }}
-                    labelStyle={{ color: '#e2e8f0', fontWeight: 'bold', marginBottom: '8px' }}
-                    itemStyle={{ color: '#f5f5f5', padding: '4px 0' }}
-                    formatter={(value) => [value.toLocaleString(), 'Count']}
-                    wrapperStyle={{ outline: 'none' }}
-                  />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
+              <div className="w-full h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={[
+                        { name: 'Delivered', value: deliveryTrend.reduce((sum, d) => sum + d.delivered, 0) },
+                        { name: 'Failed', value: deliveryTrend.reduce((sum, d) => sum + d.failed, 0) }
+                      ]}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={70}
+                      outerRadius={100}
+                      paddingAngle={2}
+                      dataKey="value"
+                      label={({ name, value, percent }) => `${name}: ${value} (${(percent * 100).toFixed(0)}%)`}
+                      labelLine={true}
+                    >
+                      <Cell fill="#10b981" />
+                      <Cell fill="#ef4444" />
+                    </Pie>
+                    <Tooltip 
+                      contentStyle={{ 
+                        backgroundColor: 'rgba(15, 23, 42, 0.95)', 
+                        border: '1px solid rgba(148, 163, 184, 0.3)',
+                        borderRadius: '0.75rem',
+                        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+                        padding: '12px'
+                      }}
+                      labelStyle={{ color: '#e2e8f0', fontWeight: 'bold', marginBottom: '8px' }}
+                      itemStyle={{ color: '#f5f5f5', padding: '4px 0' }}
+                      formatter={(value) => [value.toLocaleString(), 'Count']}
+                      wrapperStyle={{ outline: 'none' }}
+                    />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
             )}
           </CardContent>
         </Card>

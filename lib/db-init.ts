@@ -54,7 +54,6 @@ export async function initializeDatabase() {
         name VARCHAR(255) NOT NULL,
         email VARCHAR(255),
         phone_number VARCHAR(20) NOT NULL,
-        group_id INT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -78,6 +77,22 @@ export async function initializeDatabase() {
       )
     `)
     console.log('Table "contact_groups" created or already exists')
+
+    // Create contact_group_mapping junction table for many-to-many relationship
+    await conn.execute(`
+      CREATE TABLE IF NOT EXISTS contact_group_mapping (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        contact_id INT NOT NULL,
+        group_id INT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+        FOREIGN KEY (group_id) REFERENCES contact_groups(id) ON DELETE CASCADE,
+        UNIQUE KEY unique_contact_group (contact_id, group_id),
+        INDEX idx_contact_id (contact_id),
+        INDEX idx_group_id (group_id)
+      )
+    `)
+    console.log('Table "contact_group_mapping" created or already exists')
 
     // Create SMS templates table
     await conn.execute(`
