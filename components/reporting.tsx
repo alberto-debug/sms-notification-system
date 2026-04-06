@@ -12,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useAuth } from '@/context/auth'
 import { useFetch } from '@/hooks/use-api'
+import { exportReportToPDF } from '@/lib/pdf-export'
 
 interface Message {
   id: number
@@ -43,6 +44,7 @@ export default function Reporting() {
   const [dateTo, setDateTo] = useState('')
   const [filterStatus, setFilterStatus] = useState('all')
   const [showDeliveryStatus, setShowDeliveryStatus] = useState(false)
+  const [isExporting, setIsExporting] = useState(false)
 
   const { data: messagesData, isLoading: messagesLoading } = useFetch<{ messages: Message[] }>(
     '/api/messages',
@@ -145,6 +147,17 @@ export default function Reporting() {
 
   const isLoading = messagesLoading || campaignLoading
 
+  const handleExportReport = async () => {
+    try {
+      setIsExporting(true)
+      await exportReportToPDF(filteredMessages, [], dateFrom, dateTo)
+    } catch (error) {
+      console.error('Failed to export report:', error)
+    } finally {
+      setIsExporting(false)
+    }
+  }
+
   return (
     <div className="p-8 space-y-8">
       {/* Header */}
@@ -162,9 +175,22 @@ export default function Reporting() {
             <MessageSquare className="w-4 h-4" />
             Message Delivery Status
           </Button>
-          <Button className="bg-primary hover:bg-primary/90 gap-2" disabled={isLoading}>
-            <Download className="w-4 h-4" />
-            Export Report
+          <Button 
+            onClick={handleExportReport}
+            className="bg-primary hover:bg-primary/90 gap-2" 
+            disabled={isLoading || isExporting || filteredMessages.length === 0}
+          >
+            {isExporting ? (
+              <>
+                <Loader className="w-4 h-4 animate-spin" />
+                Generating PDF...
+              </>
+            ) : (
+              <>
+                <Download className="w-4 h-4" />
+                Export Report
+              </>
+            )}
           </Button>
         </div>
       </div>
@@ -443,7 +469,7 @@ export default function Reporting() {
 
       {/* Delivery Status Dialog */}
       <Dialog open={showDeliveryStatus} onOpenChange={setShowDeliveryStatus}>
-        <DialogContent className="max-w-4xl max-h-[90vh] bg-card border-border flex flex-col">
+        <DialogContent className="bg-card border-border flex flex-col" style={{ width: '90vw', maxWidth: '1400px', height: '90vh' }}>
           <DialogHeader>
             <DialogTitle>Message Delivery Status</DialogTitle>
             <DialogDescription>

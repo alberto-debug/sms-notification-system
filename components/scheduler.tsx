@@ -513,7 +513,7 @@ export default function Scheduler() {
               Schedule Message
             </Button>
           </DialogTrigger>
-          <DialogContent className="bg-card border-border text-foreground w-full max-w-6xl max-h-[98vh] overflow-y-auto">
+          <DialogContent className="bg-card border-border text-foreground overflow-y-auto" style={{ width: '90vw', maxWidth: '1400px', height: '95vh' }}>
             <DialogHeader>
               <DialogTitle className="text-2xl text-foreground">Schedule New Message</DialogTitle>
               <DialogDescription className="text-muted-foreground">
