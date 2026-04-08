@@ -25,6 +25,7 @@ interface Message {
   deliveredAt?: string
   errorMessage?: string
   createdAt: string
+  isScheduledCampaign?: boolean
 }
 
 interface Campaign {
@@ -61,9 +62,22 @@ export default function Reporting() {
   const campaigns = campaignData?.campaigns || []
 
   const filteredMessages = useMemo(() => {
-    let filtered = messages
+    let filtered = [...messages]
 
-    if (filterStatus !== 'all') {
+    // Add scheduled campaigns to the message list when filtering for "scheduled" status
+    if (filterStatus === 'scheduled') {
+      const scheduledCampaignMessages = campaigns
+        .filter(c => c.status === 'scheduled')
+        .flatMap(c => ({
+          id: c.id,
+          recipientPhone: `${c.totalRecipients} recipients`,
+          messageContent: c.messageContent,
+          status: 'pending' as const,
+          createdAt: c.createdAt,
+          isScheduledCampaign: true,
+        }))
+      filtered = scheduledCampaignMessages
+    } else if (filterStatus !== 'all') {
       // When user selects "delivered", show both sent (pending delivery) and delivered (confirmed)
       if (filterStatus === 'delivered') {
         filtered = filtered.filter(m => m.status === 'delivered' || m.status === 'sent')
@@ -81,7 +95,7 @@ export default function Reporting() {
     }
 
     return filtered
-  }, [messages, dateFrom, dateTo, filterStatus])
+  }, [messages, campaigns, dateFrom, dateTo, filterStatus])
 
   const messageStats = useMemo(() => {
     const total = filteredMessages.length
@@ -223,10 +237,11 @@ export default function Reporting() {
             </SelectTrigger>
             <SelectContent className="bg-card border-border">
               <SelectItem value="all">All Status</SelectItem>
-              <SelectItem value="delivered">Delivered</SelectItem>
-              <SelectItem value="sent">Sent</SelectItem>
-              <SelectItem value="failed">Failed</SelectItem>
+              <SelectItem value="scheduled">Scheduled</SelectItem>
               <SelectItem value="pending">Pending</SelectItem>
+              <SelectItem value="sent">Sent</SelectItem>
+              <SelectItem value="delivered">Delivered</SelectItem>
+              <SelectItem value="failed">Failed</SelectItem>
             </SelectContent>
           </Select>
         </div>

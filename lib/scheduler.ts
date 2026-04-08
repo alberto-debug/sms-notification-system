@@ -1,6 +1,7 @@
 import schedule from 'node-schedule'
 import { executeQuery } from './db'
 import { sendBulkSMSViaAfricasTalking } from './africas-talking'
+import { substituteVariables, createVariablesFromContact, extractVariables } from './message-variables'
 
 interface Campaign {
   id: number
@@ -131,14 +132,14 @@ async function sendScheduledCampaign(campaign: Campaign) {
     if (campaign.target_type === 'contacts') {
       const placeholders = targets.map(() => '?').join(',')
       recipients = await executeQuery(
-        `SELECT id, phone_number FROM contacts WHERE user_id = ? AND id IN (${placeholders})`,
+        `SELECT id, name, phone_number FROM contacts WHERE user_id = ? AND id IN (${placeholders})`,
         [campaign.user_id, ...targets]
       )
     } else if (campaign.target_type === 'groups') {
       // target_type === 'groups' - use junction table
       const placeholders = targets.map(() => '?').join(',')
       recipients = await executeQuery(
-        `SELECT DISTINCT c.id, c.phone_number 
+        `SELECT DISTINCT c.id, c.name, c.phone_number 
          FROM contacts c
          INNER JOIN contact_group_mapping cgm ON c.id = cgm.contact_id
          WHERE c.user_id = ? AND cgm.group_id IN (${placeholders})`,
@@ -148,10 +149,10 @@ async function sendScheduledCampaign(campaign: Campaign) {
       // Get both individual contacts AND group members (deduplicated)
       const placeholders = targets.map(() => '?').join(',')
       recipients = await executeQuery(
-        `SELECT DISTINCT c.id, c.phone_number FROM contacts c
+        `SELECT DISTINCT c.id, c.name, c.phone_number FROM contacts c
          WHERE c.user_id = ? AND c.id IN (${placeholders})
          UNION
-         SELECT DISTINCT c.id, c.phone_number FROM contacts c
+         SELECT DISTINCT c.id, c.name, c.phone_number FROM contacts c
          INNER JOIN contact_group_mapping cgm ON c.id = cgm.contact_id
          WHERE c.user_id = ? AND cgm.group_id IN (${placeholders})`,
         [campaign.user_id, ...targets, campaign.user_id, ...targets]
@@ -182,10 +183,68 @@ async function sendScheduledCampaign(campaign: Campaign) {
       return '+' + normalized
     })
 
-    console.log(`📤 Sending bulk campaign to ${normalizedPhones.length} recipients (using same methodology as composer)`)
+    // Check if message contains variables
+    const messageVariables = extractVariables(campaign.message_content)
+    const hasVariables = messageVariables.length > 0
 
-    // Send as BULK (all recipients in ONE API call - same as composer)
-    const bulkResult = await sendBulkSMSViaAfricasTalking(normalizedPhones, campaign.message_content)
+    console.log(`📤 Sending campaign to ${normalizedPhones.length} recipients${hasVariables ? ' (with personalization)' : ''} (using same methodology as composer)`)
+
+    // Send messages (personalized if variables are detected)
+    let bulkResult = { successful: [], failed: [] }
+    const personalizedMessageMap = new Map<string, string>() // phone -> personalized message
+    
+    if (hasVariables) {
+      // Send individual messages with variable substitution
+      console.log(`🔄 Detected variables in message: ${messageVariables.join(', ')}`)
+      
+      const successful = []
+      const failed = []
+      
+      for (const recipient of recipients) {
+        try {
+          const personalizedMessage = substituteVariables(
+            campaign.message_content,
+            createVariablesFromContact({
+              name: recipient.name || 'there',
+              phoneNumber: recipient.phone_number,
+            })
+          )
+          
+          let normalized = recipient.phone_number.trim()
+          normalized = normalized.replace(/\s/g, '')
+          normalized = normalized.replace(/\+/g, '')
+          if (!normalized.startsWith('254')) {
+            normalized = '254' + normalized
+          }
+          const phone = '+' + normalized
+          
+          // Store personalized message for this phone
+          personalizedMessageMap.set(phone, personalizedMessage)
+          
+          // Send as single message
+          const result = await sendBulkSMSViaAfricasTalking([phone], personalizedMessage)
+          
+          if (result.successful.length > 0) {
+            successful.push(...result.successful)
+          }
+          if (result.failed.length > 0) {
+            failed.push(...result.failed)
+          }
+        } catch (error) {
+          console.error(`Error sending to ${recipient.phone_number}:`, error)
+          failed.push({
+            phone: recipient.phone_number,
+            error: error instanceof Error ? error.message : 'Unknown error',
+            statusCode: 500,
+          })
+        }
+      }
+      
+      bulkResult = { successful, failed }
+    } else {
+      // Send as BULK (all recipients in ONE API call - same as composer)
+      bulkResult = await sendBulkSMSViaAfricasTalking(normalizedPhones, campaign.message_content)
+    }
 
     console.log(`📊 Bulk Campaign Result:`, {
       successful: bulkResult.successful.length,
@@ -199,11 +258,14 @@ async function sendScheduledCampaign(campaign: Campaign) {
         messageId: success.messageId,
       })
       
+      // Use personalized message if available, otherwise use campaign message
+      const messageToSave = personalizedMessageMap.get(success.phone) || campaign.message_content
+      
       await executeQuery(
         `INSERT INTO sms_messages 
          (user_id, recipient_phone, message_content, status, sent_at, provider_message_id) 
          VALUES (?, ?, ?, 'sent', NOW(), ?)`,
-        [campaign.user_id, success.phone, campaign.message_content, success.messageId || null]
+        [campaign.user_id, success.phone, messageToSave, success.messageId || null]
       )
     }
 
@@ -214,11 +276,14 @@ async function sendScheduledCampaign(campaign: Campaign) {
         error: failure.error,
       })
       
+      // Use personalized message if available, otherwise use campaign message
+      const messageToSave = personalizedMessageMap.get(failure.phone) || campaign.message_content
+      
       await executeQuery(
         `INSERT INTO sms_messages 
          (user_id, recipient_phone, message_content, status, error_message) 
          VALUES (?, ?, ?, 'failed', ?)`,
-        [campaign.user_id, failure.phone, campaign.message_content, failure.error]
+        [campaign.user_id, failure.phone, messageToSave, failure.error]
       )
     }
 

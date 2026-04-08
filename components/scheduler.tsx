@@ -4,7 +4,7 @@ import { useState, useMemo, useRef } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Clock, Edit, Trash2, CheckCircle, AlertCircle, Loader, Search, X, Users } from 'lucide-react'
+import { Plus, Clock, Edit, Trash2, CheckCircle, AlertCircle, Loader, Search, X, Users, Copy } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -14,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useAuth } from '@/context/auth'
 import { useFetch, usePost } from '@/hooks/use-api'
 import { toast } from 'sonner'
+import { substituteVariables, createVariablesFromContact, extractVariables } from '@/lib/message-variables'
 
 // Fix for native date/time inputs styling
 
@@ -40,6 +41,14 @@ interface Contact {
 interface ContactGroup {
   id: number
   name: string
+}
+
+interface Template {
+  id: number
+  name: string
+  content: string
+  variables?: any
+  createdAt: string
 }
 
 export default function Scheduler() {
@@ -74,6 +83,7 @@ export default function Scheduler() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [showContactsModal, setShowContactsModal] = useState(false)
   const [showGroupsModal, setShowGroupsModal] = useState(false)
+  const [showTemplateSelector, setShowTemplateSelector] = useState(false)
   const [validationErrors, setValidationErrors] = useState<{
     name?: boolean
     messageContent?: boolean
@@ -102,6 +112,10 @@ export default function Scheduler() {
   )
   const { data: groupsData } = useFetch<{ groups: ContactGroup[] }>(
     '/api/contact-groups',
+    { userId: user?.id }
+  )
+  const { data: templatesData, isLoading: templatesLoading } = useFetch<{ templates: Template[] }>(
+    '/api/templates',
     { userId: user?.id }
   )
   const { post: createCampaign } = usePost('/api/campaigns')
@@ -540,18 +554,66 @@ export default function Scheduler() {
               {/* Message Content */}
               <div>
                 <label className="text-sm font-medium text-foreground">Message Content *</label>
-                <Textarea
-                  placeholder="Type your message here. Keep it clear and concise..."
-                  className={`bg-secondary text-foreground mt-2 min-h-24 resize-none ${
-                    validationErrors.messageContent ? 'border-red-500 border-2' : 'border-border'
-                  }`}
-                  value={newCampaign.messageContent}
-                  onChange={(e) => {
-                    setNewCampaign({ ...newCampaign, messageContent: e.target.value })
-                    setValidationErrors(prev => ({ ...prev, messageContent: !e.target.value.trim() }))
-                  }}
-                />
-                <p className="text-xs text-muted-foreground mt-1">Character count: {newCampaign.messageContent.length}</p>
+                <div className="flex gap-2 mt-2">
+                  <Textarea
+                    placeholder="Type your message here. Keep it clear and concise..."
+                    className={`flex-1 bg-secondary text-foreground min-h-24 resize-none ${
+                      validationErrors.messageContent ? 'border-red-500 border-2' : 'border-border'
+                    }`}
+                    value={newCampaign.messageContent}
+                    onChange={(e) => {
+                      setNewCampaign({ ...newCampaign, messageContent: e.target.value })
+                      setValidationErrors(prev => ({ ...prev, messageContent: !e.target.value.trim() }))
+                    }}
+                  />
+                  <Dialog open={showTemplateSelector} onOpenChange={setShowTemplateSelector}>
+                    <DialogTrigger asChild>
+                      <Button size="sm" variant="outline" className="border-border h-fit gap-2">
+                        <Copy className="w-4 h-4" />
+                        Select Template
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-2xl max-h-96">
+                      <DialogHeader>
+                        <DialogTitle>Select Template</DialogTitle>
+                        <DialogDescription>Choose a template to use in your scheduled message</DialogDescription>
+                      </DialogHeader>
+                      <div className="max-h-80 overflow-y-auto space-y-2">
+                        {templatesLoading ? (
+                          <div className="flex items-center justify-center py-8">
+                            <Loader className="w-5 h-5 animate-spin text-muted-foreground" />
+                          </div>
+                        ) : templatesData?.templates && templatesData.templates.length > 0 ? (
+                          templatesData.templates.map(template => (
+                            <div
+                              key={template.id}
+                              onClick={() => {
+                                setNewCampaign({ ...newCampaign, messageContent: template.content })
+                                setValidationErrors(prev => ({ ...prev, messageContent: !template.content.trim() }))
+                                setShowTemplateSelector(false)
+                                toast.success('Template Selected', {
+                                  description: `Template "${template.name}" loaded`,
+                                })
+                              }}
+                              className="p-4 rounded-lg border border-border/30 bg-secondary/30 hover:bg-secondary/50 hover:border-primary/50 transition-colors cursor-pointer"
+                            >
+                              <p className="font-medium text-foreground">{template.name}</p>
+                              <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{template.content}</p>
+                              <p className="text-xs text-muted-foreground mt-2">{template.content.length} characters</p>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-center py-8">
+                            <p className="text-muted-foreground">No templates found. Create one in the Templates section.</p>
+                          </div>
+                        )}
+                      </div>
+                    </DialogContent>
+                  </Dialog>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Character count: {newCampaign.messageContent.length} | 💡 Use {'{name}'} to personalize each student's message
+                </p>
               </div>
 
               {/* Recipients Selection */}

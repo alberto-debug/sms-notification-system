@@ -77,7 +77,7 @@ export async function sendSMSViaAfricasTalking(
     const result = await sms.send({
       to: [recipientPhone],
       message: messageContent,
-      from: senderId,
+      senderId: senderId,
     })
 
     // Check if the request was successful
@@ -183,7 +183,7 @@ export async function sendBulkSMSViaAfricasTalking(
     const result = await sms.send({
       to: recipients,
       message: messageContent,
-      from: senderId,
+      senderId: senderId,
     })
 
     if (!result || !result.SMSMessageData) {

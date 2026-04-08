@@ -8,6 +8,8 @@ export async function DELETE(
   try {
     const { id } = await params
     const templateId = parseInt(id)
+    const { searchParams } = new URL(request.url)
+    const userId = searchParams.get('userId')
 
     if (!templateId) {
       return NextResponse.json(
@@ -16,12 +18,32 @@ export async function DELETE(
       )
     }
 
-    await executeQuery(
-      'DELETE FROM sms_templates WHERE id = ?',
-      [templateId]
+    if (!userId) {
+      return NextResponse.json(
+        { error: 'User ID is required' },
+        { status: 400 }
+      )
+    }
+
+    // Verify template belongs to user before deleting
+    const existing: any = await executeQuery(
+      'SELECT id FROM sms_templates WHERE id = ? AND user_id = ?',
+      [templateId, userId]
     )
 
-    return NextResponse.json({ success: true })
+    if (!existing || existing.length === 0) {
+      return NextResponse.json(
+        { error: 'Template not found' },
+        { status: 404 }
+      )
+    }
+
+    await executeQuery(
+      'DELETE FROM sms_templates WHERE id = ? AND user_id = ?',
+      [templateId, userId]
+    )
+
+    return NextResponse.json({ success: true, message: 'Template deleted' })
   } catch (error) {
     console.error('Error deleting template:', error)
     return NextResponse.json(
@@ -39,14 +61,49 @@ export async function PUT(
     const { id } = await params
     const templateId = parseInt(id)
     const body = await request.json()
-    const { name, content, variables } = body
+    const { userId, name, content, variables } = body
 
-    await executeQuery(
-      'UPDATE sms_templates SET name = ?, content = ?, variables = ? WHERE id = ?',
-      [name, content, variables ? JSON.stringify(variables) : null, templateId]
+    if (!templateId) {
+      return NextResponse.json(
+        { error: 'Template ID is required' },
+        { status: 400 }
+      )
+    }
+
+    if (!userId || !name || !content) {
+      return NextResponse.json(
+        { error: 'User ID, name, and content are required' },
+        { status: 400 }
+      )
+    }
+
+    // Verify template belongs to user before updating
+    const existing: any = await executeQuery(
+      'SELECT id FROM sms_templates WHERE id = ? AND user_id = ?',
+      [templateId, userId]
     )
 
-    return NextResponse.json({ success: true })
+    if (!existing || existing.length === 0) {
+      return NextResponse.json(
+        { error: 'Template not found' },
+        { status: 404 }
+      )
+    }
+
+    await executeQuery(
+      'UPDATE sms_templates SET name = ?, content = ?, variables = ? WHERE id = ? AND user_id = ?',
+      [name, content, variables ? JSON.stringify(variables) : null, templateId, userId]
+    )
+
+    return NextResponse.json({ 
+      success: true, 
+      message: 'Template updated',
+      template: {
+        id: templateId,
+        name,
+        content,
+      }
+    })
   } catch (error) {
     console.error('Error updating template:', error)
     return NextResponse.json(

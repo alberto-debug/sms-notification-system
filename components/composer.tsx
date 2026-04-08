@@ -8,11 +8,12 @@ import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Send, Eye, FileText, Loader, Plus, Users, X, Search, AlertCircle } from 'lucide-react'
+import { Send, Eye, FileText, Loader, Plus, Users, X, Search, AlertCircle, Copy } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { useAuth } from '@/context/auth'
 import { useFetch, usePost } from '@/hooks/use-api'
 import { toast } from 'sonner'
+import { substituteVariables, createVariablesFromContact, extractVariables, getVariableHint } from '@/lib/message-variables'
 
 interface ContactGroup {
   id: number
@@ -28,6 +29,14 @@ interface Contact {
   phoneNumber: string
   groupIds?: number[]
   groupNames?: string[]
+  createdAt: string
+}
+
+interface Template {
+  id: number
+  name: string
+  content: string
+  variables?: any
   createdAt: string
 }
 
@@ -48,6 +57,7 @@ export default function Composer() {
   const [sendErrors, setSendErrors] = useState<Array<{ phone: string; reason: string }>>([])
   const [showErrorDetails, setShowErrorDetails] = useState(false)
   const [showDuplicateDialog, setShowDuplicateDialog] = useState(false)
+  const [showTemplateSelector, setShowTemplateSelector] = useState(false)
   const [duplicateInfo, setDuplicateInfo] = useState<{
     type: 'contact-in-group' | 'contact-in-multiple-groups'
     duplicates: Array<{
@@ -64,6 +74,10 @@ export default function Composer() {
   )
   const { data: contactsData, isLoading: contactsLoading } = useFetch<{ contacts: Contact[] }>(
     '/api/contacts',
+    { userId: user?.id }
+  )
+  const { data: templatesData, isLoading: templatesLoading } = useFetch<{ templates: Template[] }>(
+    '/api/templates',
     { userId: user?.id }
   )
   const { post: sendMessage } = usePost('/api/messages')
@@ -290,47 +304,83 @@ export default function Composer() {
       setIsSending(true)
       setSendErrors([])
 
-      // Collect all phone numbers (bulk mode)
-      let phoneNumbers: string[] = []
-
+      // Get contacts to send to based on mode
+      let contactsToSend: Contact[] = []
+      
       if (sendMode === 'contacts') {
-        // Get phone numbers from selected individual contacts
-        const contactsToSend = filteredContacts.filter(c => selectedContacts.includes(c.id))
-        phoneNumbers = contactsToSend.map(c => c.phoneNumber)
+        contactsToSend = filteredContacts.filter(c => selectedContacts.includes(c.id))
       } else {
-        // Get phone numbers from contacts in selected groups
-        const groupContacts = contactsData?.contacts?.filter(c => 
+        contactsToSend = contactsData?.contacts?.filter(c => 
           c.groupIds?.some(gId => selectedGroupsToSend.includes(gId))
         ) || []
-        phoneNumbers = groupContacts.map(c => c.phoneNumber)
       }
 
-      console.log(`📤 Sending bulk message to ${phoneNumbers.length} recipients`)
+      // Check if message contains variables
+      const messageVariables = extractVariables(message)
+      const hasVariables = messageVariables.length > 0
 
-      // Send as BULK (all recipients in ONE API call per Africa's Talking docs)
-      const response: any = await sendMessage({
-        userId: user?.id,
-        recipientPhones: phoneNumbers,  // Array of phone numbers for bulk
-        messageContent: message,
-      })
+      console.log(`📤 Sending message to ${contactsToSend.length} recipients${hasVariables ? ' (with personalization)' : ''}`)
 
-      // Parse the response to count successes and failures
-      const messages = response.messages || []
-      const successCount = messages.filter((m: any) => m.status === 'sent').length
-      const failureCount = messages.filter((m: any) => m.status === 'failed').length
-      const failedMessages = messages.filter((m: any) => m.status === 'failed')
+      let successCount = 0
+      let failureCount = 0
+      const failedMessages = []
 
-      // Build error details from response
+      // Send messages (personalized if variables are detected)
+      if (hasVariables) {
+        // Send individual messages with variable substitution
+        for (const contact of contactsToSend) {
+          try {
+            const personalizedMessage = substituteVariables(
+              message,
+              createVariablesFromContact(contact)
+            )
+            
+            const response: any = await sendMessage({
+              userId: user?.id,
+              recipientPhones: [contact.phoneNumber],
+              messageContent: personalizedMessage,
+            })
+
+            if (response?.messages && response.messages.length > 0) {
+              const sent = response.messages.filter((m: any) => m.status === 'sent').length
+              const failed = response.messages.filter((m: any) => m.status === 'failed').length
+              successCount += sent
+              failureCount += failed
+              
+              if (failed > 0) {
+                failedMessages.push(...response.messages.filter((m: any) => m.status === 'failed'))
+              }
+            }
+          } catch (err) {
+            failureCount++
+            failedMessages.push({
+              recipientPhone: contact.phoneNumber,
+              errorMessage: err instanceof Error ? err.message : 'Failed to send',
+            })
+          }
+        }
+      } else {
+        // Send in bulk mode (all recipients with same message)
+        const phoneNumbers = contactsToSend.map(c => c.phoneNumber)
+        
+        const response: any = await sendMessage({
+          userId: user?.id,
+          recipientPhones: phoneNumbers,
+          messageContent: message,
+        })
+
+        const messages = response.messages || []
+        successCount = messages.filter((m: any) => m.status === 'sent').length
+        failureCount = messages.filter((m: any) => m.status === 'failed').length
+        failedMessages.push(...messages.filter((m: any) => m.status === 'failed'))
+      }
+
       const errors: Array<{ phone: string; reason: string }> = failedMessages.map((msg: any) => ({
         phone: msg.recipientPhone,
-        reason: msg.error || 'Unknown error',
+        reason: msg.errorMessage || msg.error || 'Unknown error',
       }))
 
       setSendErrors(errors)
-      setMessage('')
-      setCharacterCount(0)
-      setSelectedContacts([])
-      setSelectedGroupsToSend([])
       
       if (successCount > 0 && failureCount === 0) {
         toast.success('Messages Sent Successfully', {
@@ -344,7 +394,7 @@ export default function Composer() {
       } else {
         setShowErrorDetails(true)
         toast.error('Send Failed', {
-          description: `All ${phoneNumbers.length} messages failed. Click to view details.`,
+          description: `All ${contactsToSend.length} messages failed. Click to view details.`,
         })
       }
     } catch (err) {
@@ -444,12 +494,63 @@ export default function Composer() {
               <CardDescription className="text-muted-foreground">Compose your SMS notification</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <Textarea
-                placeholder="Type your message here..."
-                className="min-h-32 bg-secondary/50 border border-border/50 text-foreground placeholder:text-muted-foreground resize-none focus:border-primary focus:ring-1 focus:ring-primary/20"
-                value={message}
-                onChange={handleMessageChange}
-              />
+              <div className="flex gap-2 items-end">
+                <div className="flex-1">
+                  <Textarea
+                    placeholder="Type your message here..."
+                    className="min-h-32 bg-secondary/50 border border-border/50 text-foreground placeholder:text-muted-foreground resize-none focus:border-primary focus:ring-1 focus:ring-primary/20"
+                    value={message}
+                    onChange={handleMessageChange}
+                  />
+                  <p className="text-xs text-muted-foreground mt-2">
+                    💡 Tip: Use $${'{name}'} to personalize messages. Each student will see their own name.
+                  </p>
+                </div>
+                <Dialog open={showTemplateSelector} onOpenChange={setShowTemplateSelector}>
+                  <DialogTrigger asChild>
+                    <Button size="sm" variant="outline" className="border-border gap-2">
+                      <Copy className="w-4 h-4" />
+                      Select Template
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-2xl max-h-96">
+                    <DialogHeader>
+                      <DialogTitle>Select Template</DialogTitle>
+                      <DialogDescription>Choose a template to use in your message</DialogDescription>
+                    </DialogHeader>
+                    <div className="max-h-80 overflow-y-auto space-y-2">
+                      {templatesLoading ? (
+                        <div className="flex items-center justify-center py-8">
+                          <Loader className="w-5 h-5 animate-spin text-muted-foreground" />
+                        </div>
+                      ) : templatesData?.templates && templatesData.templates.length > 0 ? (
+                        templatesData.templates.map(template => (
+                          <div
+                            key={template.id}
+                            onClick={() => {
+                              setMessage(template.content)
+                              setCharacterCount(template.content.length)
+                              setShowTemplateSelector(false)
+                              toast.success('Template Selected', {
+                                description: `Template "${template.name}" loaded`,
+                              })
+                            }}
+                            className="p-4 rounded-lg border border-border/30 bg-secondary/30 hover:bg-secondary/50 hover:border-primary/50 transition-colors cursor-pointer"
+                          >
+                            <p className="font-medium text-foreground">{template.name}</p>
+                            <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{template.content}</p>
+                            <p className="text-xs text-muted-foreground mt-2">{template.content.length} characters</p>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-center py-8">
+                          <p className="text-muted-foreground">No templates found. Create one in the Templates section.</p>
+                        </div>
+                      )}
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              </div>
               
               <div className="flex justify-between items-center">
                 <div className="flex gap-4 text-sm">
