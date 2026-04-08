@@ -192,6 +192,36 @@ async function sendScheduledCampaign(campaign: Campaign) {
       failed: bulkResult.failed.length,
     })
 
+    // Save successful messages to sms_messages table (same as composer)
+    for (const success of bulkResult.successful) {
+      console.log(`💾 Saving scheduled message to DB:`, {
+        phone: success.phone,
+        messageId: success.messageId,
+      })
+      
+      await executeQuery(
+        `INSERT INTO sms_messages 
+         (user_id, recipient_phone, message_content, status, sent_at, provider_message_id) 
+         VALUES (?, ?, ?, 'sent', NOW(), ?)`,
+        [campaign.user_id, success.phone, campaign.message_content, success.messageId || null]
+      )
+    }
+
+    // Save failed messages to sms_messages table (same as composer)
+    for (const failure of bulkResult.failed) {
+      console.log(`❌ Saving failed scheduled message to DB:`, {
+        phone: failure.phone,
+        error: failure.error,
+      })
+      
+      await executeQuery(
+        `INSERT INTO sms_messages 
+         (user_id, recipient_phone, message_content, status, error_message) 
+         VALUES (?, ?, ?, 'failed', ?)`,
+        [campaign.user_id, failure.phone, campaign.message_content, failure.error]
+      )
+    }
+
     // Update campaign status to sent with counts
     await executeQuery(
       `UPDATE sms_campaigns 
