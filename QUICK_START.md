@@ -48,9 +48,17 @@ Populate the database with test accounts:
 pnpm db:seed
 ```
 
-Test credentials will be:
-- Email: `admin@notification.com` / Password: `admin123`
-- Email: `demo@notification.com` / Password: `demo123`
+Default test credentials (defined in `.env`):
+- Admin Email: `admin@sms.local` / Password: `AdminSecurePass2026!`
+- Demo Email: `demo@sms.local` / Password: `DemoTestPass2026!`
+
+**Note:** You can change these credentials by editing the `.env` file:
+```env
+ADMIN_EMAIL=your-admin-email@example.com
+ADMIN_PASSWORD=YourSecurePassword123!
+DEMO_EMAIL=your-demo-email@example.com
+DEMO_PASSWORD=YourDemoPassword456!
+```
 
 ### Step 4: Start the Application
 
@@ -67,9 +75,9 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 ### Login
 1. Visit http://localhost:3000
 2. Click "Login" or navigate to the login page
-3. Enter test credentials:
-   - Email: `admin@notification.com`
-   - Password: `admin123`
+3. Enter test credentials (from `.env`):
+   - Email: `admin@sms.local`
+   - Password: `AdminSecurePass2026!`
 4. Click Sign In
 
 ### Register

@@ -216,10 +216,15 @@ export async function initializeDatabase() {
     // SEED DATABASE DATA
     console.log('\n📝 Seeding database with initial data...')
     
+    const adminEmail = process.env.ADMIN_EMAIL || 'admin@sms.local'
+    const adminPassword = process.env.ADMIN_PASSWORD || 'AdminPass123!'
+    const demoEmail = process.env.DEMO_EMAIL || 'demo@sms.local'
+    const demoPassword = process.env.DEMO_PASSWORD || 'DemoPass456!'
+    
     // Check if admin user already exists
     const [existingAdmin]: any = await conn.execute(
       "SELECT id FROM users WHERE email = ?",
-      ['admin@notification.com']
+      [adminEmail]
     )
 
     if (existingAdmin.length === 0) {
@@ -227,14 +232,14 @@ export async function initializeDatabase() {
       await conn.execute(
         'INSERT INTO users (email, password, name, is_admin, is_active) VALUES (?, ?, ?, ?, ?)',
         [
-          'admin@notification.com',
-          hashPassword('admin123'),
+          adminEmail,
+          hashPassword(adminPassword),
           'Admin User',
           true,
           true,
         ]
       )
-      console.log('✅ Admin user created: admin@notification.com / admin123')
+      console.log(`✅ Admin user created: ${adminEmail}`)
     } else {
       console.log('ℹ️  Admin user already exists')
     }
@@ -242,7 +247,7 @@ export async function initializeDatabase() {
     // Check if demo user already exists
     const [existingDemo]: any = await conn.execute(
       "SELECT id FROM users WHERE email = ?",
-      ['demo@notification.com']
+      [demoEmail]
     )
 
     if (existingDemo.length === 0) {
@@ -250,13 +255,13 @@ export async function initializeDatabase() {
       await conn.execute(
         'INSERT INTO users (email, password, name, is_active) VALUES (?, ?, ?, ?)',
         [
-          'demo@notification.com',
-          hashPassword('demo123'),
+          demoEmail,
+          hashPassword(demoPassword),
           'Demo User',
           true,
         ]
       )
-      console.log('✅ Demo user created: demo@notification.com / demo123')
+      console.log(`✅ Demo user created: ${demoEmail}`)
     } else {
       console.log('ℹ️  Demo user already exists')
     }
