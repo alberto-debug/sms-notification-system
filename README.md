@@ -224,6 +224,8 @@ If you get "Connection refused":
    mysql> SHOW DATABASES;
    ```
 
+
+
 ### "Database does not exist" Error
 
 Create the database first:
