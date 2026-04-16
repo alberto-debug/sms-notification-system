@@ -55,9 +55,7 @@ async function initializeDatabase() {
         id INT AUTO_INCREMENT PRIMARY KEY,
         user_id INT NOT NULL,
         name VARCHAR(255) NOT NULL,
-        email VARCHAR(255),
         phone_number VARCHAR(20) NOT NULL,
-        group_id INT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -143,25 +141,6 @@ async function initializeDatabase() {
       )
     `)
 
-    // Create audit logs table
-    console.log('📋 Creating audit_logs table...')
-    await conn.execute(`
-      CREATE TABLE IF NOT EXISTS audit_logs (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id INT,
-        action VARCHAR(255) NOT NULL,
-        resource_type VARCHAR(100),
-        resource_id INT,
-        details JSON,
-        ip_address VARCHAR(45),
-        user_agent TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
-        INDEX idx_user_id (user_id),
-        INDEX idx_created_at (created_at)
-      )
-    `)
-
     console.log('\n✅ Database initialization completed successfully!')
     console.log(`Database: ${dbName}`)
     console.log('Tables created:')
@@ -171,7 +150,6 @@ async function initializeDatabase() {
     console.log('  - sms_templates')
     console.log('  - sms_messages')
     console.log('  - sms_campaigns')
-    console.log('  - audit_logs')
   } catch (error) {
     console.error('❌ Database initialization failed:', error.message)
     process.exit(1)

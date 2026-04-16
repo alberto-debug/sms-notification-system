@@ -17,7 +17,6 @@ import { toast } from 'sonner'
 interface Contact {
   id: number
   name: string
-  email?: string
   phoneNumber: string
   groupIds?: number[]
   groupNames?: string[]
@@ -35,7 +34,7 @@ export default function Contacts() {
   const { user } = useAuth()
   const [searchTerm, setSearchTerm] = useState('')
   const [searchGroupTerm, setSearchGroupTerm] = useState('')
-  const [newContact, setNewContact] = useState({ name: '', phoneNumber: '', email: '' })
+  const [newContact, setNewContact] = useState({ name: '', phoneNumber: '' })
   const [newGroup, setNewGroup] = useState({ name: '', description: '' })
   const [isCreating, setIsCreating] = useState(false)
   const [isCreatingGroup, setIsCreatingGroup] = useState(false)
@@ -106,9 +105,8 @@ export default function Contacts() {
         userId: user?.id,
         name: newContact.name,
         phoneNumber: phoneNumber,
-        email: newContact.email || null,
       })
-      setNewContact({ name: '', phoneNumber: '', email: '' })
+      setNewContact({ name: '', phoneNumber: '' })
       toast.success('Contact Added', {
         description: `${newContact.name} has been added successfully`,
       })
@@ -316,13 +314,12 @@ export default function Contacts() {
     }
 
     try {
-      const headers = ['Name', 'Phone Number', 'Email', 'Groups']
+      const headers = ['Name', 'Phone Number', 'Groups']
       const rows = data.contacts.map(contact => {
         const groupNames = contact.groupNames?.join('; ') || ''
         return [
           `"${contact.name.replace(/"/g, '""')}"`,
           contact.phoneNumber,
-          contact.email ? `"${contact.email.replace(/"/g, '""')}"` : '',
           groupNames
         ]
       })
@@ -386,7 +383,6 @@ export default function Contacts() {
 
         let name = (matches[0] || '').replace(/^"|"$/g, '').replace(/""/g, '"')
         let phoneNumber = (matches[1] || '').replace(/^"|"$/g, '').trim()
-        let email = matches[2] ? (matches[2] || '').replace(/^"|"$/g, '').trim() : ''
 
         if (!name || !phoneNumber) {
           errors.push(`Row ${i + 1}: Missing name or phone`)
@@ -406,7 +402,6 @@ export default function Contacts() {
             userId: user?.id,
             name,
             phoneNumber,
-            email: email || null,
           })
           successCount++
         } catch (err: any) {
@@ -502,15 +497,7 @@ export default function Contacts() {
                   />
                 </div>
               </div>
-              <div>
-                <label className="text-sm font-medium text-foreground">Email (Optional)</label>
-                <Input
-                  placeholder="e.g., john@example.com"
-                  className="bg-secondary border-border text-foreground mt-1"
-                  value={newContact.email}
-                  onChange={(e) => setNewContact({ ...newContact, email: e.target.value })}
-                />
-              </div>
+
               <Button
                 className="w-full bg-primary hover:bg-primary/90"
                 onClick={handleCreateContact}

@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
     }
 
     const results: any = await executeQuery(
-      `SELECT DISTINCT c.id, c.name, c.email, c.phone_number as phoneNumber, c.created_at as createdAt 
+      `SELECT DISTINCT c.id, c.name, c.phone_number as phoneNumber, c.created_at as createdAt 
        FROM contacts c
        WHERE c.user_id = ? 
        ORDER BY c.created_at DESC`,
@@ -53,7 +53,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { userId, name, email, phoneNumber, groupIds } = body
+    const { userId, name, phoneNumber, groupIds } = body
 
     if (!userId || !name || !phoneNumber) {
       return NextResponse.json(
@@ -63,8 +63,8 @@ export async function POST(request: NextRequest) {
     }
 
     const result: any = await executeQuery(
-      'INSERT INTO contacts (user_id, name, email, phone_number) VALUES (?, ?, ?, ?)',
-      [userId, name, email || null, phoneNumber]
+      'INSERT INTO contacts (user_id, name, phone_number) VALUES (?, ?, ?)',
+      [userId, name, phoneNumber]
     )
 
     const contactId = result.insertId
@@ -83,7 +83,6 @@ export async function POST(request: NextRequest) {
       contact: {
         id: contactId,
         name,
-        email,
         phoneNumber,
         groupIds: groupIds || [],
         groupNames: [],
